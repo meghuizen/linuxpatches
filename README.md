@@ -19,6 +19,7 @@ write-hot fields away from read-hot ones.
 | 1 | [Keep the scheduler hot fields together in `task_struct`](01-task-struct-scheduler-entities.md) | Moves 504 bytes that a normal task never uses (`rt`, `dl`, `scx`) out from between `se` and `sched_class`, so a context switch touches about 5 cache lines instead of 12. |
 | 2 | [Put the wakeup fields on the wakeup cache lines](02-task-struct-wakeup-fields.md) | Moves `nr_cpus_allowed` and `cpus_ptr` up next to the other wakeup fields, so waking a task pulls two remote cache lines instead of three. |
 | 3 | [Fix false sharing in `struct inode`](03-inode-false-sharing.md) | Moves `i_fop` and `i_flctx` off the cache line shared with six constantly written atomic counters, so refcount traffic stops invalidating the `open()` path. |
+| 4 | [Fix false sharing in `struct address_space`](04-address-space-false-sharing.md) | Regroups the page-cache fields so the ones written on every add or remove sit on one cache line, and the ones read on every fault or writeback sit on another. |
 
 Read them in order. Patch 2 changes the same region of the same file as
 patch 1, so apply patch 1 first.
