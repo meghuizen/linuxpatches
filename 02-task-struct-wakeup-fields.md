@@ -222,3 +222,26 @@ What this specific patch needs to survive review:
 ## 10. Realistic expectation
 
 One remote line per wakeup, provable with `perf c2c`. Visible on wakeup-heavy cross-socket workloads; lost in noise on a laptop. It earns its place by being nearly free, mechanically verifiable, and by finishing the packing job the wakeup block started.
+
+---
+
+## 11. Effectiveness test — did the patch actually work?
+
+The claim is precise: one fewer **remote** cache-line transfer per cross-CPU wakeup. Only `perf c2c` can confirm it; wall-clock alone cannot.
+
+```bash
+# Waker and wakee on different cores (different LLC if possible), both kernels:
+perf c2c record -ag -- taskset -c 0,12 perf bench sched pipe -l 500000
+perf c2c report --call-graph none -k vmlinux | grep -A3 task_struct
+```
+
+**Pass / fail gates:**
+
+| Gate | Threshold | Meaning |
+|---|---|---|
+| HITM entry for `task_struct` at the old offset (~1304, config-dependent) | Gone from the report | The remote fetch was eliminated |
+| HITM load on cachelines 0-1 | Not materially increased | The moved fields didn't overload the wakeup lines |
+| Cross-core `sched pipe` wall time | Neutral or better (10-run medians) | No hidden cost |
+| Same-core control run (`taskset -c 0,1` SMT siblings or same core) | No change at all | Confirms the effect is remote-transfer-specific, as claimed |
+
+**The honest failure mode:** baseline shows no HITM at offset ~1304 in the first place — your workload's wakeups are same-LLC and the patch has nothing to fix on this machine. Find a NUMA box or report the patch as unproven; do not submit HITM claims you could not reproduce.

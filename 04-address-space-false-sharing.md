@@ -257,3 +257,39 @@ What the commit message must contain:
 ## 10. Realistic expectation
 
 Two independent effects: the false-sharing fix is conditional (needs multi-CPU, single-file pressure — real for databases and shared-log patterns, absent for many-small-file fleets), while the write-combining of `i_pages`+`nrpages` is small but unconditional. No size change, no call-site churn, same recipe as the already-treated `sock`/`net_device`/`dentry` structs. Rank it behind Task 3 in submission order: land the inode patch first, then present this as "the same treatment for the next struct down the fault path."
+
+---
+
+## 11. Effectiveness test — did the patch actually work?
+
+Two independent claims, two independent tests. Run both; they can pass or fail separately.
+
+**Claim 1 — false-sharing removal (conditional on cross-CPU single-file pressure):**
+
+```bash
+# 32 readers + 1 writer on ONE file, both kernels:
+fio --name=r --filename=/tank/bigfile --rw=randread --bs=4k --numjobs=32 \
+    --time_based --runtime=60 --group_reporting &
+fio --name=w --filename=/tank/bigfile --rw=write --bs=1M --time_based --runtime=60 &
+perf c2c record -ag -- sleep 30; wait
+```
+
+| Gate | Threshold |
+|---|---|
+| HITM inside `struct inode`'s `i_data` region (baseline: readers in `filemap_read`/`filemap_fault`, writers in `__filemap_add_folio`) | Present before, gone after |
+| Reader IOPS during concurrent write | Up, outside run spread |
+| Remaining `xa_lock` HITM | Still present — that one is *real* contention; if it also vanished, distrust your measurement |
+
+**Claim 2 — write-combining (unconditional, small):**
+
+```bash
+perf stat -e L1-dcache-store-misses,cycles \
+  -- dd if=/dev/zero of=/tank/f bs=1M count=8192 conv=fsync   # 5 runs, medians
+```
+
+| Gate | Threshold |
+|---|---|
+| Store misses per GB written | Measurable drop (the `i_pages`+`nrpages` line merge) |
+| Throughput | Neutral or better |
+
+**The honest failure mode:** claim 1's baseline shows no HITM — your fleet doesn't contend on single files, and section 9's warning applies: the patch is correct but not worth *your* submission budget. Claim 2 failing (no store-miss delta) usually means the embedded alignment put the write group across a boundary — re-check `pahole -C inode` per section 5 before concluding.
