@@ -1,6 +1,6 @@
 # Userspace stat/syscall optimization series
 
-Companion to `/mnt/data/kernel-opt/` (kernel-side work). Baseline measurement that motivates everything here: `ls -l` on 5000 files = 5001 statx syscalls (33% of syscall time warm; N serial wire round trips on NFS). Strategy: eliminate, then trim, then batch — the cheapest syscall is the one never made. No kernel ABI changes anywhere in this series.
+Companion to [`../linux-kernel/`](../linux-kernel/README.md) (kernel-side work). Baseline measurement that motivates everything here: `ls -l` on 5000 files = 5001 statx syscalls (33% of syscall time warm; N serial wire round trips on NFS). Strategy: eliminate, then trim, then batch — the cheapest syscall is the one never made. No kernel ABI changes anywhere in this series.
 
 | File | Target codebase | What |
 |---|---|---|
