@@ -277,3 +277,32 @@ Plus the usual: `./scripts/checkpatch.pl --strict` clean, one logical change per
 ## 10. Realistic expectation
 
 This is the strongest of the three tasks: not generic tidying but a specific, currently-live false-sharing conflict with an identified reader, identified writers, and a direct measurement method. It is also the same fix, with build-time enforcement, that `sock`, `tcp_sock`, `net_device`, and `dentry` already received — `inode` is simply the last big hot struct still waiting for it. The payoff scales with cores and inode sharing: real on a 64-core build server, invisible on a laptop.
+
+---
+
+## 11. Effectiveness test — did the patch actually work?
+
+False sharing is invisible to correctness tests and to single-threaded benchmarks. Effectiveness must be shown under the only condition where the bug exists: **many CPUs hammering the same inodes.**
+
+```bash
+# Contention workload (both kernels, 5 runs each):
+for i in $(seq 64); do
+  (for j in $(seq 20000); do stat /usr/lib/x86_64-linux-gnu/libc.so.6 >/dev/null; \
+                              cat /etc/hostname >/dev/null; done) &
+done; time wait
+
+# The mechanism proof:
+perf c2c record -ag -- <the loop above>
+perf c2c report --call-graph none -k vmlinux
+```
+
+**Pass / fail gates:**
+
+| Gate | Threshold | Meaning |
+|---|---|---|
+| HITM entries for `struct inode` bytes 320-383 (readers in `do_dentry_open`, writers in `iput`/`ihold`) | Present in baseline, gone after | The false sharing existed and was removed |
+| Wall time of the 64-way loop | Improved, outside 5-run spread | The removal mattered |
+| Single-process control (`numjobs=1`) | Unchanged | No cost where there was no contention |
+| Real-workload spot check: `make -j$(nproc)` on a large tree | Neutral or better | The synthetic result survives contact with reality |
+
+**The honest failure mode:** no HITM at 320-383 in the baseline on your machine. Then the patch is theoretically sound but unproven here — it needs a higher core count or a hotter shared-inode workload before the numbers belong in a commit message.

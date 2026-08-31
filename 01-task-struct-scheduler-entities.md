@@ -267,3 +267,28 @@ Signed-off-by: Your Name <you@example.com>
 ## 9. Realistic expectation
 
 Low single-digit percent on switch-heavy benchmarks; possibly nothing on anything else. The honest case for the patch is cost, not drama: ten reordered lines, no behaviour change, verified safe against every offset consumer — for a permanent reduction of the scheduler's hot-path footprint.
+
+---
+
+## 10. Effectiveness test — did the patch actually work?
+
+Verification (section 7) proves the layout changed. This chapter proves the *performance* changed. Run it before submitting; if it fails, do not send the patch.
+
+**Primary metric:** L1 data-cache misses **per context switch** — the thing the patch claims to reduce.
+
+```bash
+# Same machine, same config, patched vs unpatched kernel, 10 runs each:
+perf stat -e context-switches,L1-dcache-load-misses,cycles \
+  -- taskset -c 2 perf bench sched pipe -l 500000
+# Compute: L1-dcache-load-misses / context-switches for each run, take medians.
+```
+
+**Pass / fail gates:**
+
+| Gate | Threshold | Meaning |
+|---|---|---|
+| Misses per switch | Median drop, outside the spread of the 10 baseline runs | The mechanism worked |
+| Wall time (`sched pipe`, `sched messaging`) | Neutral or better | No hidden cost |
+| RT regression check: `cyclictest` under `chrt -f 50`, plus one `SCHED_DEADLINE` task | Max latency unchanged within noise | The classes whose entities moved paid nothing |
+
+**The honest failure mode:** wall time improves but misses-per-switch does not move. That is measurement noise, not your patch — rerun; if it persists, the improvement is not yours to claim. Conversely, misses drop but wall time doesn't: still submittable (the win is real but small on this hardware), report both numbers plainly.
