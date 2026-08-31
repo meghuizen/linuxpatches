@@ -18,6 +18,8 @@ All of it is written against **Linux 7.2, vanilla**.
    hardware. The document is a plan and a readiness audit, not a diff.
 3. **Trackers** (7, 8) — nothing to build. Upstream work we want but do not
    control. The document says what to watch and when to adopt.
+4. **References** (10) — someone else already built it and it never merged.
+   The document points at their work and explains why it stalled.
 
 ## 1-4: Cache layout patches
 
@@ -158,12 +160,39 @@ spending any attention on it.
 
 **Cost:** one archive search per quarter, one grep per kernel bump.
 
+## 10: Reference
+
+### [10. `getdents` support for io_uring](10-iouring-getdents.md)
+
+io_uring still has no way to read directory entries. `getdents` is the syscall
+behind `readdir()`, and it is missing in 7.2, so every async runtime falls back
+to a blocking thread pool for directory work.
+
+Two people have already built this and neither landed it: Stefan Roesch posted
+patches in December 2021, and Tobias Danecker revived and extended them in 2023
+at <https://github.com/tdanecker/iouring-getdents> — a patched kernel, patched
+Rust `io-uring` and `tokio-uring` crates, and a QEMU test harness.
+
+**Expected impact:** the author reports directory traversal roughly 3.3x faster
+than a thread-pool runtime and 1.7x faster than `du`, walking the kernel source
+tree. Those numbers come from a QEMU microvm on ext2 with caches dropped, so
+treat the direction as sound and the exact multipliers as setup-specific.
+Programs that walk large trees gain; programs that read a few directories, or
+that spend their time on file contents, gain nothing.
+
+**Cost:** this is stuck for real technical reasons, not neglect. Directory
+reads keep shared position state on the file, the entry-copy callback has to
+run in the right context, and on a cold cache the request falls back to a
+worker thread anyway — so part of the "async" claim is really just batching.
+Al Viro raised these in 2021 and nobody has answered them. Do not start unless
+you are ready to argue VFS locking upstream.
+
 ## Where to start
 
 - Want something you can actually apply today: patch 3, then 1, 2, 4.
 - Have server hardware and time: patch 5.
 - Run large memory-tiering fleets: patch 9.
-- Just want to stay informed: 7 and 8.
+- Just want to stay informed: 7, 8, and 10.
 
 ## How to apply a patch
 
