@@ -135,6 +135,41 @@ let latest_time = match time {
    three lines after the safe-traversal machinery built to prevent exactly that
    has succeeded.
 
+**Implemented — the timestamp half only. The identity half was dropped, and
+this section was wrong to ask for it.**
+
+The race is real and was reproduced, which is the part worth keeping. A symlink
+flipped between a dangling target and a real directory dated 2020-01-01, with
+`du -D -s --time link` in a loop: **9 wrong timestamps in 3371 runs before, 0 in
+6614 after.** The wrong value was the symlink's own mtime beside a size from the
+directory it pointed at. A second defect turned up alongside it: the path stat
+passed `Follow::No` while the descriptor had been opened following symlinks, so
+a symlink operand read the link's timestamp rather than the directory's.
+
+Collapsing the four identity types into `FileInformation` does not survive
+contact with the code:
+
+- `FileInformation` wraps a `rustix::fs::Stat`, which on Linux is rustix's own
+  struct, not `libc::stat`. `safe_traversal` works in nix's `libc::stat`.
+  Bridging them means copying every field between two struct definitions, or
+  fabricating a half-filled one whose `file_size()` and `number_of_links()` then
+  lie.
+- `du` identifies files on Windows by the 128-bit `FILE_ID_INFO` because ReFS
+  needs it; `FileInformation` carries the 64-bit `BY_HANDLE_FILE_INFORMATION`
+  index. Adopting it there is a regression.
+- `du` keeps one identity per file visited in `seen_inodes`. Its own type is 24
+  bytes; a `FileInformation` is a whole `struct stat`.
+- `mv`'s `(dev, ino)` key could become one, but its pre-scan needs `is_file()`
+  and `nlink()` from the same look, which `FileInformation` does not offer — so
+  it costs a second stat per file, or new uucore API.
+
+`safe_traversal::FileInfo` is therefore kept. What the fix actually needed was
+the timestamp bridge, not the identity bridge.
+
+Two follow-ups, both larger than the fix: the operand's own `Stat` is still
+built path-based even in safe-traversal mode, and birth time could come from the
+descriptor on Linux via `statx(fd, "", AT_EMPTY_PATH)`, closing the last window.
+
 ## 4. Open the file, then stat the descriptor
 
 Thirteen utilities call `fs::metadata(path)` on a file they then open: `wc` (4
@@ -196,68 +231,56 @@ for an unreadable directory, and that fallback belongs in `cat`. Note
 
 ## 5. Consolidate same-file detection, mostly by deleting code
 
-Ten utilities, seven mutually incompatible methods, and five near-identical
-**private** canonicalize-and-compare functions at `cp.rs:2065`,
-`copydir.rs:639`, `ln.rs:380`, `install.rs:987`, `install.rs:776`. `cp`, `mv`,
-`ln`, `install` and `pwd` each hold more than one internally.
+**Implemented, and the census behind this section was wrong three times over.
+Kept as written plus these corrections, because the corrections are the useful
+part.**
 
-`install` contains both a right and a wrong version, twenty lines apart:
+The claim was: ten utilities, seven incompatible methods, and five
+near-identical private canonicalize-and-compare functions at `cp.rs:2065`,
+`copydir.rs:639`, `ln.rs:380`, `install.rs:987`, `install.rs:776`. Checking each
+one:
 
-```rust
-// install.rs:959 — copy_file_safe, correct, but hand-rolls the comparison
-if let Ok(to_stat) = to_parent_fd.stat_at(to_filename, SymlinkBehavior::Follow) {
-    #[allow(clippy::unnecessary_cast)]
-    if from_meta.dev() == to_stat.st_dev as u64 && from_meta.ino() == to_stat.st_ino as u64 {
-        return Err(InstallError::SameFile(...).into());
-    }
-}
+| Site | What it actually is |
+|---|---|
+| `cp.rs` `paths_are_same_entry` | `MissingHandling::Normal`, **false** when a path cannot be resolved. One half of an AND with a hardlink check. Left alone. |
+| `copydir.rs` `path_has_prefix` | **Not a same-file check at all** — a `starts_with` prefix test for the recursion guard. Census error. |
+| `ln.rs` `is_same_entry` | `MissingHandling::Missing`, **true** when a path cannot be resolved — the opposite default to cp's. One half of an AND. Left alone. |
+| `install.rs:776` | A real duplicate. Converted. |
+| `install.rs:987` | A real duplicate. Converted. |
 
-// install.rs:987 — copy_file, uses canonicalize instead
-if let Ok(to_abs) = to.canonicalize()
-    && from.canonicalize()? == to_abs
-{
-    return Err(InstallError::SameFile(from.to_path_buf(), to.to_path_buf()).into());
-}
-```
+So two of five, not five. The three that were left share a name and a shape but
+not a contract: cp and ln disagree on what an unresolvable path means, and one
+shared helper would change behaviour for at least one of them.
 
-Both collapse onto the helper that already exists:
-
-```rust
-use uucore::fs::FileInformation;
-
-if let (Ok(a), Ok(b)) = (FileInformation::from_path(from, true),
-                         FileInformation::from_path(to, true))
-    && a == b
-{
-    return Err(InstallError::SameFile(from.to_path_buf(), to.to_path_buf()).into());
-}
-```
-
-**Why it helps: deduplication only. The bug this was suspected of is not there.**
-
-The suspicion was that `copy_file`'s canonicalize version has a false negative
-the dev/ino version does not: canonicalize resolves symlinks, not hard links, so
-`install a b` where `b` is a hard link to `a` should compare unequal, skip the
-SameFile error, and let install truncate its own source.
-
-Tested, 2026-09-01, and it does not happen:
+**The suspected data-loss bug is not there.** The idea was that `copy_file`'s
+canonicalize check has a false negative the dev/ino version does not, letting
+`install a b` truncate its own source when `b` is a hard link to `a`. Tested:
 
 ```
 printf 'IMPORTANT SOURCE DATA\n' > a && ln a b   # same inode
 install a b   # GNU:    rc=0, a intact
-install a b   # uutils: rc=0, a intact, 22 bytes
+install a b   # uutils: rc=0, a intact
 ```
 
-Both implementations survive it, for the same reason: `copy_file` calls
-`fs::remove_file(to)` before creating the destination, which unlinks the *name*
-`b` while `a` still holds the inode. The data is never truncated in place. GNU
-accepts this case too, so there is no parity gap either.
+Both survive, because `copy_file` unlinks the destination *name* before creating
+it, so the source inode is never truncated in place. GNU accepts the case too.
 
-So this step removes five duplicate implementations and nothing more. That is
-still worth doing — five private clones of one comparison is a maintenance
-liability, and `install` holding both a right and a wrong version twenty lines
-apart is the kind of thing that goes wrong later — but it must be described in
-the PR as a cleanup, not as a fix, and it does not jump the queue.
+**And the "right version and wrong version" framing was backwards.**
+`copy_file`'s canonicalize check runs *before* that `fs::remove_file(to)`.
+Converting it to dev/ino would newly **reject** the hard-link case that both
+implementations accept today. `copy_file_safe`'s dev/ino check is safe only
+because its own caller unlinks first. They are two checks at different points in
+one flow, each correct where it sits — not a wrong one and a right one. The
+shipped change keeps the canonicalize form for that reason.
+
+Net result: `install`'s three checks become one, `cp`'s reflink cleanup check
+uses `FileInformation` instead of hand-rolled dev/ino, and nothing else moves.
+Verified byte-identical over 276 cells — twelve scenarios against 23 command
+forms across `cp`, `ln` and `install`. A cleanup, described as one.
+
+That sweep also turned up 31 pre-existing differences against GNU, two of them
+in the direction where uutils accepts what GNU refuses. Filed separately; not
+this section's work.
 
 Also in scope: `split`'s `paths_refer_to_same_file` has **different semantics on
 unix and wasi under one name** — `split/platform/unix.rs:214` is dev/ino and
