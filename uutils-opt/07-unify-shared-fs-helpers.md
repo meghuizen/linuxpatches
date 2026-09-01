@@ -1,182 +1,221 @@
-# Fix 7 — Unify the repeated filesystem-access fixes into uucore helpers
+# Fix 7 — Shared filesystem helpers in uucore
 
 **Target repository:** `uutils/coreutils`, `src/uucore` plus adopting utilities
-**What this fix does, in one sentence:** the fixes in documents 01–04 keep reappearing in different utilities because each is written where it was noticed; this collapses the ones that are genuinely the same thing into shared helpers, and says explicitly which ones must *not* be shared.
+**Summary:** Documents 01-04 each fix one utility. Several of those fixes are the same work done in different places. This document says which of them should be shared code in `uucore`, which should stay duplicated, and what happened when the work was done.
 
 | | |
 |---|---|
 | Pattern to fix | The same filesystem question answered separately in many utilities |
-| Replacement | Three shared helpers, one type consolidation, two memoizations |
-| Effort | Five PRs, staged; weeks, not days |
-| Risk | Low per step, but `src/uucore` is reviewed harder than per-tool fixes |
-| Line refs | Against `meghuizen/coreutils` at 3251833, 2026-09-01 — re-grep before patching |
+| Replacement | Two shared helpers, one timestamp bridge, two memoizations |
+| Effort | Five PRs, staged |
+| Risk | Low per step. `src/uucore` gets reviewed harder than per-tool fixes |
+| Line refs | Against `meghuizen/coreutils` at 3251833, 2026-09-01. Re-grep before patching |
+
+**Status: implemented.** Each section below records what was proposed and what
+the implementation found. Several proposals turned out to be wrong. Those are
+marked, with the reason, because the reasons are the useful part of this
+document.
 
 ---
 
-## 1. Background: four shapes, not eleven bugs
+## 1. Background
 
-Documents 01–04 each fix one utility. A census of all 109 utilities shows why
-that keeps happening: the defects are a handful of shapes, each duplicated.
+A census of all 109 utilities found these repeated shapes.
 
-| Shape | Utilities affected | Verdict |
+| Shape | Utilities | Decision |
 |---|---|---|
-| Same path stat'ed repeatedly in one operation | 18 | **Do not unify** |
-| Type-only question via a fresh stat | 4 | No helper; pass the `DirEntry` down |
-| `metadata()` then `open()` on the same file | 13 | **Build one helper** |
-| `canonicalize`/`exists` in a per-entry loop | 7 | Do not unify; three are bugs |
-| Same-file detection | 10, with **7 incompatible methods** | **Consolidate — mostly deletion** |
-| Follow-symlink decision | 12 | Unify the leaf only, never the enums |
+| Same path stat'ed repeatedly in one operation | 18 | Leave duplicated |
+| Type-only question answered by a fresh stat | 4 | Leave duplicated |
+| `metadata()` then `open()` on the same file | 13 (later corrected to 11) | Build a helper |
+| `canonicalize`/`exists` in a per-entry loop | 7 | Leave duplicated |
+| Same-file detection | 10 | Partly consolidate |
+| Follow-symlink decision | 12 | Share the leaf only |
 
-This is also less about new code than it looks. `uucore::fs` already contains
-`FileInformation`, `paths_refer_to_same_file` and `are_hardlinks_to_same_file`.
-The duplication persists because five utilities wrote private clones instead,
-and because no single existing function is trusted enough to be used alone —
-`mv.rs:532-535` ORs three of them together.
+`uucore::fs` already contains `FileInformation`, `paths_refer_to_same_file` and
+`are_hardlinks_to_same_file`. Some of the duplication exists because five
+utilities wrote private versions instead of using them.
 
-Where a step below only removes duplication, it says so. Three of the six steps
-do only that. Two remove a real defect: the TOCTOU hole in `du` (section 3) and
-the zero-umask window in `cp` (section 6).
+Two of the six steps below fix a defect: section 3 and section 6. The other
+four remove duplication and change no behaviour. Each PR says which it is in
+its first sentence.
+
+---
 
 ## 2. Share the `metadata(path, follow)` leaf
 
+### The duplication
+
 `uucore::perms::get_metadata` (`perms.rs:279`) and ls's private
 `get_metadata_with_deref_opt` (`ls.rs:1559`) are the same function, character
-for character. Seven more inline copies of the body exist at `test.rs:405` and
-`:443`, `touch.rs:479-482` and `:723-732`, `cp.rs:2698-2700`, `du.rs:150-157`,
+for character:
+
+```rust
+if follow { path.metadata() } else { path.symlink_metadata() }
+```
+
+Seven more inline copies of that body exist at `test.rs:405`, `test.rs:443`,
+`touch.rs:479-482`, `touch.rs:723-732`, `cp.rs:2698-2700`, `du.rs:150-157` and
 `stat.rs:1377`.
+
+### The change
+
+Move the function to `uucore::fs`, which 43 crates already depend on.
+`perms` is unix-only and used by 8, so it is the narrower home. Keep
+`perms::get_metadata` as a re-export so `chown`, `chgrp` and `chmod` do not
+change.
 
 ```rust
 // src/uucore/src/lib/features/fs.rs
 /// Metadata for `path`, following a final symlink only when `follow` is true.
 ///
-/// `follow: true` is `Path::metadata` (stat); `follow: false` is
-/// `Path::symlink_metadata` (lstat) and describes the link itself.
-pub fn metadata_for(path: &Path, follow: bool) -> IOResult<fs::Metadata> {
+/// `follow: true` is `Path::metadata` (stat), which describes the file a
+/// symlink points at. `follow: false` is `Path::symlink_metadata` (lstat),
+/// which describes the symlink itself.
+pub fn get_metadata(path: impl AsRef<Path>, follow: bool) -> IOResult<fs::Metadata> {
+    let path = path.as_ref();
     if follow { path.metadata() } else { path.symlink_metadata() }
 }
 
-// src/uucore/src/lib/features/perms.rs — keep the existing name working
-pub use crate::fs::metadata_for as get_metadata;
+// src/uucore/src/lib/features/perms.rs
+pub use crate::features::fs::get_metadata;
 ```
 
-`fs` is the right home: 43 crates already depend on that feature, where `perms`
-is unix-only and used by 8.
+### Value
 
-**Why it helps.** Honestly: this removes duplication, not a bug. The value is
-that the polarity stops being retyped. Seven inline copies each independently
-encode "follow means `metadata`, not `symlink_metadata`", and that is exactly
-the pair a reader inverts.
+This removes duplication. It fixes no bug. The benefit is that the meaning of
+`follow` is written down once instead of eight times. Eight separate copies is
+eight chances to get the direction backwards.
 
-**What must not be unified:** the option enums. `du::Deref` needs
-`Args(Vec<PathBuf>)` for `-D`; `ls::Dereference` needs `DirArgs`;
-`perms::TraverseSymlinks` separates recursion from operand semantics and is the
-only one that gets that split right. One enum for all of them would have six
-variants where each tool uses three, and every `match` would carry unreachable
-arms. Each utility collapses its own enum to a `bool` at the call site, which
-`du.rs:141-147` and `cp.rs:1289` already do.
+### What the implementation found
 
-## 3. One file-identity type, and bridge the two Metadata types
+Seven of the nine sites converted, plus a tenth the census missed in
+`test/platform/wasi.rs`. Two sites are not this function:
 
-Four representations of "which file is this" exist: `uucore::fs::FileInformation`
-(`fs.rs:54`), `uucore::safe_traversal::FileInfo` (`safe_traversal.rs:655`), du's
-private `FileInfo { file_id: u128, dev_id: u64 }` (`du.rs:120`), and mv's bare
-`(u64, u64)` tuple keys (`hardlink.rs:20,27`).
+- `du.rs:150-157` is a three-way choice. Between the follow and no-follow arms
+  there is a Windows fast path that reads metadata from a `DirEntry`.
+- `touch.rs:723-732` falls back to `symlink_metadata` when `metadata` fails
+  with anything other than `NotFound`, so a link that is broken in some other
+  way still yields times.
 
-The mismatch costs a live bug in `du::Stat::new_from_dirfd` (`du.rs:178-211`):
+The `perms` feature now declares `fs` in `Cargo.toml`. That is a correction:
+`perms.rs` already imported `FileInformation` from `fs`, so the dependency
+existed and was undeclared.
+
+### What was left alone
+
+The dereference option enums. `du::Deref` needs `Args(Vec<PathBuf>)` for `-D`.
+`ls::Dereference` needs `DirArgs`. `perms::TraverseSymlinks` keeps recursion
+semantics separate from operand semantics. A single enum covering all of them
+would have six variants where each utility uses three, and every `match` would
+need arms that cannot happen. Each utility keeps its own enum and reduces it to
+a `bool` at the call site, which `du.rs:141-147` and `cp.rs:1289` already do.
+
+---
+
+## 3. Take du's directory timestamp from the descriptor
+
+### The defect
+
+`du::Stat::new_from_dirfd` (`du.rs:178-211`) fstats a directory descriptor it
+already holds. The size, block count and inode therefore describe that exact
+directory. The timestamp did not: it came from a second, path-based stat.
 
 ```rust
-let safe_metadata = dir_fd.metadata()?;                  // fd-based, safe
-let file_info = safe_metadata.file_info();
-let file_info_option = Some(FileInfo {                   // cast between two
-    file_id: file_info.inode() as u128,                  // identity types
-    dev_id: file_info.device(),
-});
+let safe_metadata = dir_fd.metadata()?;                  // fstat on a held fd
 let blocks = safe_metadata.blocks();
 
 // Create a temporary std::fs::Metadata by reading the same path
 // This is still needed for compatibility [...]
-let std_metadata = fs::symlink_metadata(full_path)?;     // path-based!
+let std_metadata = fs::symlink_metadata(full_path)?;     // re-resolves the path
 let latest_time = time.and_then(|time| metadata_get_time(&std_metadata, time));
 ```
 
-The comment admits the second stat exists only because `Stat.metadata` is typed
-`std::fs::Metadata` and cannot be fed from a `DirFd`. Yet
+Any component of `full_path` can be replaced between the two calls. `du` can
+then report a size and inode from one directory and a timestamp from another.
+This happens three lines after the safe-traversal code that exists to prevent
+it.
+
 `safe_traversal::Metadata` already exposes `modified()`, `accessed()` and
-`changed()` (`safe_traversal.rs:779-787`) — the data was in hand.
+`changed()` (`safe_traversal.rs:779-787`), so the data was already available.
+Birth time is not in `struct stat`, so that one field still needs a path
+lookup.
+
+### The change
 
 ```rust
 // src/uucore/src/lib/features/safe_traversal.rs
 impl Metadata {
-    /// The identity of this file, in the type the rest of uucore uses.
-    pub fn file_information(&self) -> crate::fs::FileInformation { ... }
-
-    /// The timestamp `field` names, from this stat. `Birth` is not in
-    /// `struct stat`, so it is the one field that still needs a path lookup.
+    /// The timestamp `field` names, read out of this stat.
+    /// `Birth` is always `None`: struct stat has no birth time.
     pub fn time(&self, field: MetadataTimeField) -> Option<SystemTime> { ... }
 }
 
-// src/uu/du/src/du.rs — after
-let safe_metadata = dir_fd.metadata()?;
+// src/uu/du/src/du.rs
 let latest_time = match time {
-    Some(MetadataTimeField::Birth) => birth_time_of(full_path),
+    Some(MetadataTimeField::Birth) => /* path lookup, following symlinks */,
     Some(field) => safe_metadata.time(field),
     None => None,
 };
 ```
 
-**Why it helps.** Two things, and the second matters more.
+### Evidence
 
-1. One fewer syscall per directory — the small half.
-2. It closes a TOCTOU hole **in code whose whole purpose is to be TOCTOU-safe.**
-   `dir_fd.metadata()` is an `fstat` on a descriptor already held: it describes
-   exactly that directory. `fs::symlink_metadata(full_path)` re-resolves the
-   path from scratch, so any component can be replaced in between. Today `du`
-   can report a size and inode from one directory and a timestamp from another,
-   three lines after the safe-traversal machinery built to prevent exactly that
-   has succeeded.
+The affected branch is reached when the path stat of the operand fails but
+opening it succeeds, which is when something is changing the tree underneath
+`du`. A symlink was flipped between a dangling target and a real directory
+dated 2020-01-01, with `du -D -s --time link` running in a loop:
 
-**Implemented — the timestamp half only. The identity half was dropped, and
-this section was wrong to ask for it.**
+| build | successful runs | wrong timestamp |
+|---|---|---|
+| before | 3371 | 9 |
+| after | 6614 | 0 |
 
-The race is real and was reproduced, which is the part worth keeping. A symlink
-flipped between a dangling target and a real directory dated 2020-01-01, with
-`du -D -s --time link` in a loop: **9 wrong timestamps in 3371 runs before, 0 in
-6614 after.** The wrong value was the symlink's own mtime beside a size from the
-directory it pointed at. A second defect turned up alongside it: the path stat
-passed `Follow::No` while the descriptor had been opened following symlinks, so
-a symlink operand read the link's timestamp rather than the directory's.
+The wrong value was the symlink's own mtime printed next to a size taken from
+the directory it pointed at.
 
-Collapsing the four identity types into `FileInformation` does not survive
-contact with the code:
+The implementation also found a second defect. The path stat passed
+`Follow::No` while the descriptor had been opened following symlinks, so for a
+symlink operand it read the link's timestamp rather than the directory's.
 
-- `FileInformation` wraps a `rustix::fs::Stat`, which on Linux is rustix's own
+### The proposal that was dropped
+
+This section originally also asked for the four file-identity types to be
+collapsed into `fs::FileInformation`: `safe_traversal::FileInfo`, du's private
+`FileInfo { file_id: u128, dev_id: u64 }` and mv's `(u64, u64)` tuple keys.
+That does not work.
+
+- `FileInformation` wraps a `rustix::fs::Stat`. On Linux that is rustix's own
   struct, not `libc::stat`. `safe_traversal` works in nix's `libc::stat`.
   Bridging them means copying every field between two struct definitions, or
-  fabricating a half-filled one whose `file_size()` and `number_of_links()` then
-  lie.
+  building a half-filled struct whose `file_size()` and `number_of_links()`
+  then return wrong values.
 - `du` identifies files on Windows by the 128-bit `FILE_ID_INFO` because ReFS
-  needs it; `FileInformation` carries the 64-bit `BY_HANDLE_FILE_INFORMATION`
-  index. Adopting it there is a regression.
-- `du` keeps one identity per file visited in `seen_inodes`. Its own type is 24
-  bytes; a `FileInformation` is a whole `struct stat`.
-- `mv`'s `(dev, ino)` key could become one, but its pre-scan needs `is_file()`
-  and `nlink()` from the same look, which `FileInformation` does not offer — so
-  it costs a second stat per file, or new uucore API.
+  requires it. `FileInformation` carries the 64-bit
+  `BY_HANDLE_FILE_INFORMATION` index. Adopting it there loses information.
+- `du` stores one identity per file visited in `seen_inodes`. Its own type is
+  24 bytes. A `FileInformation` is a whole `struct stat`.
+- mv's tuple could become a `FileInformation`, but its pre-scan also needs
+  `is_file()` and `nlink()` from the same look, which `FileInformation` does
+  not provide. Adopting it costs a second stat per file or new uucore API.
 
-`safe_traversal::FileInfo` is therefore kept. What the fix actually needed was
-the timestamp bridge, not the identity bridge.
+`safe_traversal::FileInfo` was kept. The fix needed the timestamp bridge only.
 
-Two follow-ups, both larger than the fix: the operand's own `Stat` is still
-built path-based even in safe-traversal mode, and birth time could come from the
-descriptor on Linux via `statx(fd, "", AT_EMPTY_PATH)`, closing the last window.
+### Follow-ups
+
+The operand's own `Stat` is still built from a path even in safe-traversal
+mode. Opening the descriptor first would close the same window for the operand.
+Birth time could come from the descriptor on Linux via
+`statx(fd, "", AT_EMPTY_PATH)`. Both are larger changes than the fix above.
+
+---
 
 ## 4. Open the file, then stat the descriptor
 
-Thirteen utilities call `fs::metadata(path)` on a file they then open: `wc` (4
-sites at `wc.rs:285,697,741,776`), `shred` (3), `install` (3),
-`head`/`tail`/`truncate`/`dd` (2 each), `cat`/`comm`/`split`/`pr`/`od`/`sort` (1
-each). `head.rs:514,540`, `dd.rs:1549` and `od/multifile_reader.rs:171` already
-do it correctly, so the target shape is in the tree.
+### The duplication
+
+Several utilities call `fs::metadata(path)` on a file they then open. That is
+two path walks, and the metadata can describe a different file than the one
+that gets read.
 
 ```rust
 // src/uucore/src/lib/features/fs.rs
@@ -184,77 +223,93 @@ do it correctly, so the target shape is in the tree.
 ///
 /// The metadata comes from the descriptor, so it cannot describe a different
 /// file than the one that will be read. Only for callers that were going to
-/// open the file anyway: opening has side effects a stat does not — a FIFO
-/// blocks until a writer appears.
-pub fn open_and_stat(path: &Path) -> IOResult<(File, fs::Metadata)> {
-    let file = File::open(path)?;
+/// open the file anyway: opening has side effects a stat does not, such as a
+/// FIFO blocking until a writer appears.
+///
+/// The io::Error is returned unchanged. What File::open reports differs per
+/// platform and per file type, so turning it into a message is the caller's
+/// job.
+pub fn open_and_stat(path: &Path) -> IOResult<(fs::File, fs::Metadata)> {
+    let file = fs::File::open(path)?;
     let metadata = file.metadata()?;
     Ok((file, metadata))
 }
 ```
 
-A representative adoption, `split.rs:475-484`:
+### Value
 
-```rust
-// before — two path walks, and the size may describe a different file
-let metadata = metadata(Path::new(input))?;
-let metadata_size = metadata.len();
-if num_bytes <= metadata_size {
-    Ok(metadata_size)
-} else {
-    let mut tmp_fd = File::open(Path::new(input))?;
-    let end = tmp_fd.seek(SeekFrom::End(0))?;
+In `split`, the size taken from the stat decides the chunk arithmetic, and the
+file it seeks on is opened separately. If the path is replaced between the two,
+split sizes its output for one file and reads another. Taking both from one
+descriptor removes that.
 
-// after — one walk, and the size describes the handle we seek on
-let (mut fd, metadata) = uucore::fs::open_and_stat(Path::new(input))?;
-let metadata_size = metadata.len();
-if num_bytes <= metadata_size {
-    Ok(metadata_size)
-} else {
-    let end = fd.seek(SeekFrom::End(0))?;
-```
+The syscall count is not an argument for this change. In split's common branch
+a `statx` becomes an `openat`, because that branch never opened the file
+before. Only the rare seek branch loses a call.
 
-**Why it helps.** In `split` the size taken from the stat decides the chunk
-arithmetic, and the file it then seeks on is opened separately. If the path is
-replaced in between, split sizes its output for one file and reads another.
-Deriving both from one descriptor makes that impossible. The saved path walk is
-incidental.
+### The trap
 
-**The trap.** The helper must not be clever about errors. On Linux `File::open`
-on a directory succeeds and fails later at `read()`; on Windows it fails
-immediately; a unix socket fails with ENXIO. Error mapping is per-utility, so
-the helper returns the raw `io::Error` and the caller decides. Document 01 hit
-this: `cat` needed an `open_error` fallback to keep printing "Is a directory"
-for an unreadable directory, and that fallback belongs in `cat`. Note
-`comm.rs:296` guards its directory check behind
-`#[cfg(any(target_os = "wasi", windows))]` — adopt there carefully or not at all.
+The helper must not interpret the error. On Linux `File::open` on a directory
+succeeds and fails later at `read()`. On Windows it fails immediately. A unix
+socket fails with ENXIO. Error mapping belongs in each utility. In the `cat`
+work (document 01), `cat` needed a fallback that stats the path when the open
+fails, so an unreadable directory still prints "Is a directory". That fallback
+lives in `cat`.
 
-## 5. Consolidate same-file detection, mostly by deleting code
+### What the implementation found
 
-**Implemented, and the census behind this section was wrong three times over.
-Kept as written plus these corrections, because the corrections are the useful
-part.**
+Adopted in `split` and `install`. Corrections to the census:
 
-The claim was: ten utilities, seven incompatible methods, and five
-near-identical private canonicalize-and-compare functions at `cp.rs:2065`,
-`copydir.rs:639`, `ln.rs:380`, `install.rs:987`, `install.rs:776`. Checking each
-one:
+- `wc` has two sites, not four. `wc.rs:697` and `wc.rs:776` are plain
+  `File::open` with no paired stat.
+- `sort` has no site. Both its opens are unpaired.
+- `sum.rs:80` is a site the census missed, with the same cfg-gated shape as
+  `comm.rs:296`.
 
-| Site | What it actually is |
+`wc.rs:285` looks like a straightforward case and is not. `try_as_files0` opens
+the file and drops the handle on the non-regular-file path, so converting it
+makes `wc --files0-from=FIFO` open the FIFO twice and block on the second open.
+This was implemented, confirmed under strace, and reverted. It needs the
+descriptor threaded into `Inputs::Files0From` first.
+
+Sites left for other reasons: `wc.rs:741` stats in a phase that runs before
+anything is opened; `comm.rs:296` and `sum.rs:80` are cfg-gated to wasi and
+windows, where `File::open` on a directory fails so the check must come first;
+`tail.rs:230`, `truncate.rs:244` and `shred.rs:667` open for writing or with
+custom flags; `pr.rs:762` stats in a different function from the one that
+opens; `install.rs:890` and `install.rs:1114` stat one path and open another.
+
+---
+
+## 5. Consolidate same-file detection
+
+### What was claimed
+
+Ten utilities detect "same file" seven different ways, with five near-identical
+private canonicalize-and-compare functions at `cp.rs:2065`, `copydir.rs:639`,
+`ln.rs:380`, `install.rs:987` and `install.rs:776`.
+
+### What is actually there
+
+Two of the five.
+
+| Site | What it is |
 |---|---|
-| `cp.rs` `paths_are_same_entry` | `MissingHandling::Normal`, **false** when a path cannot be resolved. One half of an AND with a hardlink check. Left alone. |
-| `copydir.rs` `path_has_prefix` | **Not a same-file check at all** — a `starts_with` prefix test for the recursion guard. Census error. |
-| `ln.rs` `is_same_entry` | `MissingHandling::Missing`, **true** when a path cannot be resolved — the opposite default to cp's. One half of an AND. Left alone. |
-| `install.rs:776` | A real duplicate. Converted. |
-| `install.rs:987` | A real duplicate. Converted. |
+| `cp.rs` `paths_are_same_entry` | `MissingHandling::Normal`, returns false when a path cannot be resolved. One half of an AND with a hardlink check. |
+| `copydir.rs` `path_has_prefix` | Not a same-file check. A `starts_with` test used by the recursion guard. |
+| `ln.rs` `is_same_entry` | `MissingHandling::Missing`, returns **true** when a path cannot be resolved. The opposite default to cp's. |
+| `install.rs:776` | A duplicate. Converted. |
+| `install.rs:987` | A duplicate. Converted. |
 
-So two of five, not five. The three that were left share a name and a shape but
-not a contract: cp and ln disagree on what an unresolvable path means, and one
-shared helper would change behaviour for at least one of them.
+`cp` and `ln` disagree about what an unresolvable path means, and each is one
+half of an AND with a hardlink check. Sharing one helper between them would
+change behaviour for at least one.
+
+### Two claims that were wrong
 
 **The suspected data-loss bug is not there.** The idea was that `copy_file`'s
-canonicalize check has a false negative the dev/ino version does not, letting
-`install a b` truncate its own source when `b` is a hard link to `a`. Tested:
+canonicalize check misses hard links, so `install a b` where `b` is a hard link
+to `a` would let install truncate its own source. Tested on 2026-09-01:
 
 ```
 printf 'IMPORTANT SOURCE DATA\n' > a && ln a b   # same inode
@@ -262,105 +317,149 @@ install a b   # GNU:    rc=0, a intact
 install a b   # uutils: rc=0, a intact
 ```
 
-Both survive, because `copy_file` unlinks the destination *name* before creating
-it, so the source inode is never truncated in place. GNU accepts the case too.
+Both survive. `copy_file` calls `fs::remove_file(to)` before creating the
+destination, which unlinks the name `b` while `a` still holds the inode. GNU
+accepts this case as well, so there is no parity gap.
 
-**And the "right version and wrong version" framing was backwards.**
-`copy_file`'s canonicalize check runs *before* that `fs::remove_file(to)`.
-Converting it to dev/ino would newly **reject** the hard-link case that both
-implementations accept today. `copy_file_safe`'s dev/ino check is safe only
-because its own caller unlinks first. They are two checks at different points in
-one flow, each correct where it sits — not a wrong one and a right one. The
-shipped change keeps the canonicalize form for that reason.
+**The "right version and wrong version" framing was backwards.** `copy_file`'s
+canonicalize check runs before that `fs::remove_file(to)`. Converting it to a
+dev/ino comparison would newly reject the hard-link case that both
+implementations accept today. `copy_file_safe`'s dev/ino check is safe because
+its caller unlinks first. They are two checks at different points in one flow.
+Each is correct where it sits. The shipped change keeps the canonicalize form.
 
-Net result: `install`'s three checks become one, `cp`'s reflink cleanup check
-uses `FileInformation` instead of hand-rolled dev/ino, and nothing else moves.
-Verified byte-identical over 276 cells — twelve scenarios against 23 command
-forms across `cp`, `ln` and `install`. A cleanup, described as one.
+### Result
 
-That sweep also turned up 31 pre-existing differences against GNU, two of them
-in the direction where uutils accepts what GNU refuses. Filed separately; not
-this section's work.
+`install`'s three checks become one. `cp`'s reflink cleanup check uses
+`FileInformation` instead of a hand-rolled dev/ino comparison. Nothing else
+moved. Verified byte-identical over 276 cells: twelve scenarios against 23
+command forms across `cp`, `ln` and `install`.
 
-Also in scope: `split`'s `paths_refer_to_same_file` has **different semantics on
-unix and wasi under one name** — `split/platform/unix.rs:214` is dev/ino and
-stdin-aware, `split/platform/wasi.rs:13` is canonicalize and is not. A latent
-correctness bug, independent of everything above.
+That sweep also found 31 pre-existing differences against GNU 9.4, two of them
+in the direction where uutils accepts what GNU refuses. Those are filed
+separately.
 
-**Leave the OR-chains alone for now.** `mv.rs:532-535` ORs three methods because
-dev/ino cannot distinguish "the same directory entry" from "two hard links to
-one inode" — a real distinction `cp.rs:2064` documents. A discriminated answer
-instead of a bool would let those collapse, but that is a new API needing its
-own justification and must not ride along inside a deletion PR.
+---
 
-## 6. The two memoizations
+## 6. Read the umask once, remember uid and gid names
+
+### The umask window
+
+`uucore::mode::get_umask` (`mode.rs:358`) has to set the umask to 0 to read it,
+then set it back. `cp` calls it once per file, and `chmod` once per file for a
+symbolic mode.
 
 ```rust
-// src/uucore/src/lib/features/mode.rs:358 — before
-pub fn get_umask() -> u32 {
-    let mask = umask(Mode::empty());   // process umask is 0 from here...
-    let _ = umask(mask);               // ...to here, once per file
-    mask.bits() as u32
-}
+// before
+let mask = umask(Mode::empty());   // process umask is 0 from here
+let _ = umask(mask);               // to here, once per file
 
 // after
-pub fn get_umask() -> u32 {
-    // Read once: no utility here changes its umask after startup, and each
-    // read leaves the process umask at 0 for a moment.
-    static UMASK: OnceLock<u32> = OnceLock::new();
-    *UMASK.get_or_init(|| { ... })
-}
+static UMASK: OnceLock<u32> = OnceLock::new();
+*UMASK.get_or_init(|| { ... })
 ```
 
-**Why it helps.** Not the syscalls. `cp` is multi-threaded when copying with a
-progress bar, and every call opens a window in which the process umask is 0, so
-a file another thread creates in that window gets the wrong permissions.
-`chmod -R g+w` on 1953 entries opens that window 1953 times.
+The syscall count is secondary. Each call leaves the process umask at 0 for a
+moment, so a file another thread creates in that moment gets the wrong
+permissions. `cp` is multi-threaded when it shows a progress bar. On a
+1953-entry tree that window opens 1953 times.
 
-The second is `uucore::entries::uid2usr`/`gid2grp` (`entries.rs:313,318`), which
-have no cache. `ls` has a private one (`ls.rs:1015-1024`); `stat` and `chown -v`
-pay per file — an `/etc/passwd` open per file locally, a network round trip
-under LDAP or SSSD. A memo table behind the existing `PW_LOCK`, caching negative
-results too, then `ls` drops its private caches.
+The doc comment records that this is only correct because no utility here
+changes its own umask after startup, and that a caller which does must not use
+the helper.
 
-## 7. What must not be unified
+### The name lookups
 
-**The repeated-stat pattern (18 utilities).** The largest by site count — `cp`
-~12 clusters, `mv` ~9, `install` ~8, `chmod` 4 — and the one that most looks
-like it wants a helper. It does not. The clusters ask different questions:
-`cp.rs:1476` asks "is either side a symlink, does dest exist"; `shred.rs:630`
-asks "directory / not-a-directory / missing / permission"; `install.rs:577` asks
-"is this a legal install target". A helper spanning them takes a bitmask of
-questions and returns a struct of answers — worse than the duplication.
-`mv.rs:389-402` and `mv.rs:856-859` carry comments showing someone already fixed
-these in `mv` by holding the `Metadata` locally, with no shared helper. That is
-the model.
+`uucore::entries::uid2usr` and `gid2grp` (`entries.rs:313,318`) have no cache.
+`stat` calls both per file for `%U` and `%G`. `uucore::perms` calls them per
+entry for `chown -v` and `chgrp -v`. With nsswitch on files that is an
+open/read/close of `/etc/passwd` and `/etc/group` per file. Under LDAP or SSSD
+it is a network round trip per file.
 
-**A shared lazy metadata type in uucore.** `ls::PathData` (`ls.rs:810-1005`) is
-the only lazy/cached metadata type in the tree and the obvious thing to promote.
-It should stay where it is. Its `metadata()` getter locks and flushes stdout
-mid-listing and calls `show!(LsError::IOErrorContext(..))`, setting the process
-exit code and picking message wording from an ls-specific "is this a
-command-line argument" flag. It carries an EBADF fallback that exists only for
-GNU compatibility on `/proc/self/fd/N`. Its constructor takes `&Config`. The one
-trait it implements is `Colorable`, from the external `lscolors` crate — keeping
-it would make uucore depend on an ls-specific crate. Strip all that and what is
-left is `OnceCell<Option<Metadata>>`, not worth a shared type.
+Misses are cached as well, so a tree owned by a deleted uid does not repeat the
+failed lookup.
 
-The four apparent reinventions are reinventions of *different* things:
-`PathData` is lazy plus error-reporting, `du::Stat` is eager plus derived
-values, `cp::copydir::Context` memoises one boolean, `mv::HardlinkTracker` is a
-dedup index. Only their identity representation is genuinely shared — section 3.
+### Measurements
 
-**Canonicalize-in-a-loop.** Seven utilities, not one problem. Three are bugs to
-fix directly — `shred.rs:810` is a probe-then-rename race where `exists()` is
-the wrong tool and `rename` should just be attempted. Two are the same
-`--parents` ancestor loop copy-pasted between `cp.rs:1616` and `copydir.rs:601`,
-to be deduplicated inside `cp`, not in uucore.
+`strace -c -f`, release build, 1960-entry tree.
 
-**Type-only checks.** Four sites: `rm.rs:669`, `ls.rs:1547-1550`,
-`chmod.rs:587-597`, `copydir.rs:474-481`. Each is a three-line local fix — pass
-the `DirEntry` down. A helper for four sites is machinery for nothing.
+| command | before | after |
+|---|---|---|
+| `chmod -R g+w tree` | 3922 umask, 12308 syscalls | 2 umask, 8388 |
+| `stat` on 1600 files | 3223 openat / 3211 read / 3257 close, 33894 | 25 / 13 / 29, 14616 |
+| `chown -Rv root:root tree` | 3972 openat, 30103 | 52 openat, 6469 |
+| `chgrp -Rv 0 tree` | 2011 openat, 18275 | 51 openat, 6458 |
+
+### Two implementation notes
+
+The plan said to put the tables behind the existing `PW_LOCK`. That would
+deadlock: `PW_LOCK` is taken inside `Passwd::locate`, which the cache calls
+while holding its own table. The tables have their own mutexes, always taken
+before `PW_LOCK` and never while holding it. The lock order is written in a
+comment.
+
+`ls` keeps its private `uid_cache`/`gid_cache`. Removing them was tried and
+backed out. The shared table returns a `String`, so `ls` would clone one per
+entry where it previously borrowed from its own map, costing about 10% on
+`ls -l` over 3000 files with 700 distinct owners. `ls` gains nothing from the
+shared table, and it is a benched utility. Returning `Arc<str>` would fix that,
+but `uid2usr` and `gid2grp` have 59 call sites across eight crates, and 55 are
+`unwrap_or_else(|_| id.to_string())` whose fallback allocates a `String`
+anyway. That is separate work.
+
+---
+
+## 7. What was deliberately left duplicated
+
+### Repeated stats of one path (18 utilities)
+
+The largest group by site count: `cp` about 12 clusters, `mv` about 9,
+`install` about 8, `chmod` 4. The clusters ask different questions.
+`cp.rs:1476` asks whether either side is a symlink and whether the destination
+exists. `shred.rs:630` asks whether the path is a directory, a non-directory,
+missing, or permission-denied. `install.rs:577` asks whether the path is a
+legal install target. A helper covering all of them would take a bitmask of
+questions and return a struct of answers.
+
+The fix for each site is local: hold the `Metadata` the function already
+fetched. `mv.rs:389-402` and `mv.rs:856-859` carry comments showing this was
+already done there by hand, with no shared helper.
+
+### A shared lazy metadata type
+
+`ls::PathData` (`ls.rs:810-1005`) is the only lazy metadata type in the tree
+and the obvious candidate to move into uucore. It should stay in `ls`.
+
+- Its `metadata()` getter locks and flushes stdout mid-listing, then calls
+  `show!(LsError::IOErrorContext(..))`, which sets the process exit code and
+  picks message wording from an ls-specific flag.
+- It has an EBADF fallback that exists only for GNU compatibility on
+  `/proc/self/fd/N`.
+- Its constructor takes `&Config`.
+- The one trait it implements is `Colorable`, from the external `lscolors`
+  crate. Keeping it would make uucore depend on an ls-specific crate.
+
+Remove all of that and what remains is `OnceCell<Option<Metadata>>`.
+
+The four types that look like reinventions of each other are not.
+`ls::PathData` is lazy and reports errors. `du::Stat` is eager and holds
+derived values. `cp::copydir::Context` memoises one boolean.
+`mv::HardlinkTracker` is a deduplication index. They share only their identity
+representation, which is section 3.
+
+### canonicalize or exists inside a loop (7 utilities)
+
+Three are bugs to fix directly, not to abstract. `shred.rs:810` probes with
+`exists()` and then calls `rename`, which silently replaces the destination.
+Two are the same `--parents` ancestor loop copy-pasted between `cp.rs:1616` and
+`copydir.rs:601`, which should be deduplicated inside `cp`.
+
+### Type-only checks (4 sites)
+
+`rm.rs:669`, `ls.rs:1547-1550`, `chmod.rs:587-597`, `copydir.rs:474-481`. Each
+is a three-line local fix: pass the `DirEntry` down.
+
+---
 
 ## 8. Upstreaming notes
 
@@ -369,62 +468,64 @@ PR. `CONTRIBUTING.md:237-244` requires that moving code be its own commit,
 separate from adopting it. `CONTRIBUTING.md:282-285` asks for small,
 self-contained, stackable PRs.
 
-The binding practical constraint is CI: `.github/workflows/benchmarks.yml:51-55`
-means **any** diff touching `src/uucore/` runs CodSpeed benchmarks for all 37
-benched utilities in two modes — 74 jobs, 90-minute timeout, already hitting
-rate limits. So: few uucore PRs, each doing one thing.
+The practical constraint is CI. `.github/workflows/benchmarks.yml:51-55` means
+any diff touching `src/uucore/` runs CodSpeed benchmarks for all 37 benched
+utilities in two modes: 74 jobs, 90-minute timeout, already hitting rate
+limits. Keep the number of uucore-touching PRs low.
 
-| Order | PR | uucore change | Adopters in the same PR |
+| Order | PR | uucore change | Adopters |
 |---|---|---|---|
-| 1 | share the `metadata(path, follow)` leaf | `fs.rs`, `perms.rs` re-export | all 11 copies (mechanical) |
-| 2 | one identity type, bridge the Metadata types | `fs.rs`, `safe_traversal.rs` | `du` (closes the TOCTOU hole), `mv` |
-| 3 | `open_and_stat` | `fs.rs` | `split`, `wc`, `tail`, `install` |
-| 4 | same-file consolidation | none — deletions in utilities | `install`, `cp`, `ln`, `split` |
-| 5 | uid/gid memo + `get_umask` `OnceLock` | `entries.rs`, `mode.rs` | `ls` drops its private caches |
+| 1 | share `get_metadata` | `fs.rs`, `perms.rs` re-export | ls, cp, stat, touch, test |
+| 2 | du timestamp from the descriptor | `safe_traversal.rs` | du |
+| 3 | `open_and_stat` | `fs.rs` | split, install |
+| 4 | same-file consolidation | none | install, cp |
+| 5 | umask and uid/gid caches | `entries.rs`, `mode.rs` | none |
 
-Steps 3 and 4 continue as follow-up PRs, one utility each, so a regression
-bisects to one tool. Step 2 waits for the statx-mask work in document 04, which
-already removes part of du's coupling. If the step-4 hard-link test reproduces,
-that fix goes first and alone — a data-loss bug does not wait behind a refactor.
+Step 2 stacks on the statx-mask work from document 04, which reworked du's
+metadata handling first.
 
-## 9. Effectiveness test — did it actually work?
+---
+
+## 9. Effectiveness test
 
 ```bash
-# Step 4's suspected bug: ALREADY TESTED, does not reproduce. Kept as a
-# regression test, not as an open question - see section 5.
-cd /tmp && rm -rf t && mkdir t && cd t
-printf 'source data\n' > a && ln a b        # b is a hard link to a
-./target/release/install a b; echo "rc=$?"; cat a   # rc=0, a intact, same as GNU
-
-# Step 2: the TOCTOU claim, not just the syscall count
+# Section 3: no path-based stats during traversal
 strace -f -e trace=statx,newfstatat ./target/release/du -s --time /some/tree \
-  | grep -c 'AT_FDCWD'        # path-based stats during traversal; want 0
+  | grep -c 'AT_FDCWD'
 
-# Step 3: one path walk per input, not two
+# Section 4: one path walk per input
 strace -c -f ./target/release/split -n 2 /some/file 2>&1 | grep -E 'statx|openat'
 
-# Step 5: the umask window
-strace -c -f ./target/release/chmod -R g+w /tmp/t 2>&1 | grep umask   # want 2
+# Section 6: the umask window
+strace -c -f ./target/release/chmod -R g+w /tmp/t 2>&1 | grep umask
+
+# Section 5: regression test, not an open question. Already run; see section 5.
+printf 'source data\n' > a && ln a b
+./target/release/install a b; echo "rc=$?"; cat a   # rc=0, a intact, as GNU
 ```
 
 | Gate | Threshold | Meaning |
 |---|---|---|
-| `install a b` with `b` a hard link to `a` | rc=0, `a` intact, matching GNU | Unchanged by step 4 - it is a cleanup |
-| Path-based stats in `du --time` traversal | Zero | The fd's own stat is being used; the TOCTOU window is closed |
-| `statx` per input file in `split` | One, not two | `open_and_stat` wired correctly |
-| `umask` calls per `chmod -R` run | 2, not 2×entries | The zero-umask window is opened once |
-| GNU test suite, every adopting utility | Identical pass set | No semantic drift |
-| Lines removed vs added | Net negative | The refactor is a consolidation, not a growth |
+| Path-based stats in `du --time` traversal | 0 | The descriptor's own stat is used |
+| `statx` per input in `split` | 1 | `open_and_stat` wired correctly |
+| `umask` calls per `chmod -R` run | 2 | The window opens once per process |
+| `install a b`, `b` a hard link to `a` | rc=0, `a` intact | Matches GNU; unchanged |
+| GNU test suite, every adopting utility | Same pass set | No behaviour drift |
+| Lines removed vs added | Net negative | The work is consolidation |
 
-**The honest failure mode:** letting the series' framing carry a PR that has not
-earned it. Section 2 removes eleven copies of a three-line function and fixes
-nothing. Section 5 was suspected of hiding a data-loss bug; the test was run and
-it does not, so that is a cleanup too. Section 7 is a list of things not to do.
-That leaves two steps that fix something real — the TOCTOU hole in `du` and the
-zero-umask window in `cp` — and each PR should say which kind it is in its own
-first sentence.
+### Failure modes to watch for
 
-A second failure mode is over-reach: taking "unify" as licence to build the
-shared lazy metadata type that section 7 argues against. That would trade eleven
-small duplications for one abstraction nobody can read, on a codebase whose own
-guidance is that readability beats a saved syscall.
+The first is describing a cleanup as a fix. Sections 2, 4 and 5 remove
+duplication and change no behaviour. Sections 3 and 6 fix a defect. Each PR
+should state which it is in its first sentence rather than inheriting the tone
+of the series.
+
+The second is building the shared lazy metadata type that section 7 argues
+against. That would replace many small duplications with one abstraction that
+is harder to read, in a codebase whose guidance puts readability ahead of a
+saved syscall.
+
+The third is trusting this document over the code. Nine of its original claims
+were wrong, and every one was found by someone reading the source instead of
+the plan. Re-check line numbers and re-read the surrounding function before
+changing anything here.
