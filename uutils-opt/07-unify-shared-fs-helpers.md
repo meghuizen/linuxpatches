@@ -33,8 +33,9 @@ The duplication persists because five utilities wrote private clones instead,
 and because no single existing function is trusted enough to be used alone —
 `mv.rs:532-535` ORs three of them together.
 
-Where a step below only removes duplication, it says so. Two of them remove a
-real bug.
+Where a step below only removes duplication, it says so. Three of the six steps
+do only that. Two remove a real defect: the TOCTOU hole in `du` (section 3) and
+the zero-umask window in `cp` (section 6).
 
 ## 2. Share the `metadata(path, follow)` leaf
 
@@ -232,14 +233,31 @@ if let (Ok(a), Ok(b)) = (FileInformation::from_path(from, true),
 }
 ```
 
-**Why it helps — but verify first.** Reading the code, `copy_file`'s canonicalize
-version looks like it has a false negative that the dev/ino version does not:
-canonicalize resolves symlinks, not hard links, so `install a b` where `b` is a
-hard link to `a` should compare unequal, skip the SameFile error, and let
-install truncate its own source. **This is inferred from reading, not measured.**
-The first task in this step is to write that test. If it reproduces, this is a
-data-loss fix, gets split out, and ships first. If it does not, this step is a
-deduplication and must be described as one.
+**Why it helps: deduplication only. The bug this was suspected of is not there.**
+
+The suspicion was that `copy_file`'s canonicalize version has a false negative
+the dev/ino version does not: canonicalize resolves symlinks, not hard links, so
+`install a b` where `b` is a hard link to `a` should compare unequal, skip the
+SameFile error, and let install truncate its own source.
+
+Tested, 2026-09-01, and it does not happen:
+
+```
+printf 'IMPORTANT SOURCE DATA\n' > a && ln a b   # same inode
+install a b   # GNU:    rc=0, a intact
+install a b   # uutils: rc=0, a intact, 22 bytes
+```
+
+Both implementations survive it, for the same reason: `copy_file` calls
+`fs::remove_file(to)` before creating the destination, which unlinks the *name*
+`b` while `a` still holds the inode. The data is never truncated in place. GNU
+accepts this case too, so there is no parity gap either.
+
+So this step removes five duplicate implementations and nothing more. That is
+still worth doing — five private clones of one comparison is a maintenance
+liability, and `install` holding both a right and a wrong version twenty lines
+apart is the kind of thing that goes wrong later — but it must be described in
+the PR as a cleanup, not as a fix, and it does not jump the queue.
 
 Also in scope: `split`'s `paths_refer_to_same_file` has **different semantics on
 unix and wasi under one name** — `split/platform/unix.rs:214` is dev/ino and
@@ -349,11 +367,11 @@ that fix goes first and alone — a data-loss bug does not wait behind a refacto
 ## 9. Effectiveness test — did it actually work?
 
 ```bash
-# Step 4, first and most important: is this a bug or a cleanup?
+# Step 4's suspected bug: ALREADY TESTED, does not reproduce. Kept as a
+# regression test, not as an open question - see section 5.
 cd /tmp && rm -rf t && mkdir t && cd t
 printf 'source data\n' > a && ln a b        # b is a hard link to a
-./target/release/install a b; echo "rc=$?"; cat a
-# GNU install refuses this. If uutils truncates a, step 4 is a data-loss fix.
+./target/release/install a b; echo "rc=$?"; cat a   # rc=0, a intact, same as GNU
 
 # Step 2: the TOCTOU claim, not just the syscall count
 strace -f -e trace=statx,newfstatat ./target/release/du -s --time /some/tree \
@@ -368,19 +386,20 @@ strace -c -f ./target/release/chmod -R g+w /tmp/t 2>&1 | grep umask   # want 2
 
 | Gate | Threshold | Meaning |
 |---|---|---|
-| `install a b` with `b` a hard link to `a` | Refuses, as GNU does; `a` intact | Step 4 is a correctness fix, not a cleanup |
+| `install a b` with `b` a hard link to `a` | rc=0, `a` intact, matching GNU | Unchanged by step 4 - it is a cleanup |
 | Path-based stats in `du --time` traversal | Zero | The fd's own stat is being used; the TOCTOU window is closed |
 | `statx` per input file in `split` | One, not two | `open_and_stat` wired correctly |
 | `umask` calls per `chmod -R` run | 2, not 2×entries | The zero-umask window is opened once |
 | GNU test suite, every adopting utility | Identical pass set | No semantic drift |
 | Lines removed vs added | Net negative | The refactor is a consolidation, not a growth |
 
-**The honest failure mode:** shipping step 1 and calling the series a success.
-Step 1 removes eleven copies of a three-line function and fixes nothing — it is
-worth doing, but the value in this document is concentrated in steps 2 and 4,
-and step 4's value is unproven until that first test is run. If the hard-link
-test does not reproduce, say so and downgrade step 4 to a deduplication rather
-than quietly leaving the bug-fix framing in the PR description.
+**The honest failure mode:** letting the series' framing carry a PR that has not
+earned it. Section 2 removes eleven copies of a three-line function and fixes
+nothing. Section 5 was suspected of hiding a data-loss bug; the test was run and
+it does not, so that is a cleanup too. Section 7 is a list of things not to do.
+That leaves two steps that fix something real — the TOCTOU hole in `du` and the
+zero-umask window in `cp` — and each PR should say which kind it is in its own
+first sentence.
 
 A second failure mode is over-reach: taking "unify" as licence to build the
 shared lazy metadata type that section 7 argues against. That would trade eleven
