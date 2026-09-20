@@ -1,0 +1,122 @@
+From 319eef3c060ced795445f60d113644ba11fd95cc Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:29:24 +0200
+Subject: [PATCH] fs: regroup struct address_space by read-hot vs write-hot
+ fields
+
+The fields written on every page-cache add and remove (i_pages, nrpages,
+writeback_index) are interleaved with the fields read on every fault,
+buffered read and writeback (host, a_ops, gfp_mask, flags). That costs
+twice.
+
+First, false sharing: nrpages sits 16 bytes from a_ops, so a CPU
+appending pages to a file keeps stealing the line another CPU needs
+merely to find ->read_folio. Second, split writers: i_pages and nrpages
+are written together under xa_lock but land on different cachelines, so
+every add or remove dirties two lines where one would do.
+
+Group the read-mostly fields first, use invalidate_lock as a spacer, and
+group the write-hot fields after it. The rmap block goes last, with
+i_mmap_rwsem kept next to the tree it guards.
+
+Within the read group the order is by distance to the write group rather
+than by size: flags takes offset 16 so that it is 64 bytes from nrpages
+and cannot share a line with it at any base alignment. At its natural
+place after the 4-byte members it would be 56 bytes away, and pahole
+shows it then landing on the same line as nrpages in the embedded
+instance.
+
+The dominant instance is embedded as inode->i_data, which the previous
+two patches put on a cacheline boundary; without them the read group
+would land on the inode refcount line instead.
+
+pahole, x86-64 defconfig, inode->i_data at offset 384:
+
+  before: line 5 host, i_pages        line 6 gfp_mask, nrpages
+          line 7 a_ops, wb_err, flags, writeback_index, i_private_lock
+          (three lines mixing read-hot and write-hot fields)
+  after:  line 6 host, a_ops, flags, gfp_mask, wb_err
+          line 7 i_pages, nrpages, writeback_index, i_private_lock
+          (no line mixes the two)
+
+  sizeof(struct address_space) unchanged at 152
+  sizeof(struct inode) unchanged at 560
+
+No functional change; no call site changes. All access is by field name,
+and the aligned(sizeof(long)) attribute that folio->mapping's low-bit
+tagging relies on is untouched.
+
+The false-sharing half of this pays only when several CPUs work on one
+file - databases, shared logs, a large mmap'd file - and is absent for
+many-small-files workloads. The write-combining half is smaller but
+unconditional.
+
+Based on https://github.com/meghuizen/linuxpatches
+linux-kernel/04-address-space-false-sharing.md
+---
+ include/linux/fs.h | 44 +++++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 37 insertions(+), 7 deletions(-)
+
+diff --git a/include/linux/fs.h b/include/linux/fs.h
+index 346d005d1918..875eeb2b7201 100644
+--- a/include/linux/fs.h
++++ b/include/linux/fs.h
+@@ -475,18 +475,48 @@ struct mapping_metadata_bhs {
+  * @i_private_lock: For use by the owner of the address_space.
+  */
+ struct address_space {
++	/*
++	 * Read-mostly: set at init, read on every fault, buffered read and
++	 * writeback. Kept together and away from the write-hot fields below,
++	 * which used to be interleaved with them, so that a page-cache add or
++	 * remove on one CPU no longer invalidates these reads on every other
++	 * CPU touching the same file.
++	 *
++	 * Order inside the group is by distance to the write group, not by
++	 * size. flags is read on every fault and writeback path, so it takes
++	 * offset 16, which is 64 bytes from nrpages and therefore can never
++	 * share a line with it at any base alignment. Placed after the 4-byte
++	 * members instead, at offset 24, it would be only 56 bytes away and
++	 * would land on the same line as nrpages in the embedded instance.
++	 */
+ 	struct inode		*host;
+-	struct xarray		i_pages;
+-	struct rw_semaphore	invalidate_lock;
+-	gfp_t			gfp_mask;
+-	atomic_t		i_mmap_writable;
+-	struct rb_root_cached	i_mmap;
+-	unsigned long		nrpages;
+-	pgoff_t			writeback_index;
+ 	const struct address_space_operations *a_ops;
+ 	unsigned long		flags;
++	gfp_t			gfp_mask;
+ 	errseq_t		wb_err;
++
++	/*
++	 * Taken only for truncate/hole-punch coordination, so quiet enough to
++	 * serve as the wall between the two groups. It is not read-mostly
++	 * itself - even down_read() writes the lock word - which is exactly
++	 * why it must sit between them rather than inside the group above.
++	 */
++	struct rw_semaphore	invalidate_lock;
++
++	/*
++	 * Write-hot: i_pages (through xa_lock) and nrpages are modified
++	 * together, under the same lock, on every page-cache add and remove -
++	 * see __filemap_add_folio() and page_cache_delete(). Adjacent so that
++	 * one such operation dirties one cacheline rather than two.
++	 */
++	struct xarray		i_pages;
++	unsigned long		nrpages;
++	pgoff_t			writeback_index;
+ 	spinlock_t		i_private_lock;
++
++	/* rmap: mmap/munmap frequency; the lock stays with the tree it guards. */
++	atomic_t		i_mmap_writable;
++	struct rb_root_cached	i_mmap;
+ 	struct rw_semaphore	i_mmap_rwsem;
+ } __attribute__((aligned(sizeof(long)))) __randomize_layout;
+ 	/*
+-- 
+2.53.0
+

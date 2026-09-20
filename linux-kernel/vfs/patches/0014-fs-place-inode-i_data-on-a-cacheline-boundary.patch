@@ -1,0 +1,125 @@
+From 61b7c20573a52241b2123114dc1089d1d94e622b Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:29:23 +0200
+Subject: [PATCH] fs: place inode->i_data on a cacheline boundary
+
+The next patch groups address_space's read-mostly fields (host, a_ops,
+gfp_mask, wb_err, flags) at the front of the struct. The dominant
+address_space instance is embedded as inode->i_data, which sits directly
+after the write-hot inode refcounts:
+
+  i_count @344, i_dio_count @348, i_writecount @352, i_readcount @356
+  i_data @360
+  (cacheline boundary at 384)
+
+So without this patch, the regrouping would put a_ops on the same
+cacheline as the refcounts, and iget()/iput() on an inode would
+invalidate that inode's a_ops for every other CPU faulting on its pages
+- reintroducing through address_space the conflict removed from inode
+two patches ago. Before the regrouping those bytes hold i_pages, which
+is write-hot too, so the collision does not exist today.
+
+Fix it by placement rather than by padding. The i_devices and i_pipe
+unions are 24 bytes together, cold for a regular file (one is for device
+inodes, the other for pipes, cdevs and symlinks, both set at inode
+setup), and moving them in front of i_data puts it at offset 384 - a
+cacheline boundary, given SLAB_HWCACHE_ALIGN from the previous patch.
+
+  before: i_data @360 (360 % 64 = 40)
+  after:  i_data @384 (384 % 64 =  0)
+  sizeof(struct inode) unchanged at 560
+
+Aligning i_data with __attribute__((aligned(SMP_CACHE_BYTES))) would
+also work and would be more obviously self-documenting, but it raises
+the alignment of struct inode itself, so sizeof is rounded up to 640.
+That drops the slab from 7 to 6 inodes per page, 585 to 683 bytes
+effective per inode - a 17% increase on one of the kernel's most heavily
+allocated structs, in exchange for a latency win that is conditional on
+several CPUs sharing hot inodes. Placement achieves the same layout for
+nothing.
+
+Because it costs nothing, it is also fragile: one field inserted above
+i_data silently undoes it. inode_init() therefore asserts the offset at
+build time, in the manner of the cacheline groups in struct sock and
+struct net_device. The assert is guarded for CONFIG_RANDSTRUCT, where
+struct inode's __randomize_layout makes any fixed offset impossible and
+the whole optimisation a no-op.
+
+No functional change.
+
+Based on https://github.com/meghuizen/linuxpatches
+linux-kernel/04-address-space-false-sharing.md, section 5
+---
+ fs/inode.c         | 16 ++++++++++++++++
+ include/linux/fs.h | 21 ++++++++++++++++++++-
+ 2 files changed, 36 insertions(+), 1 deletion(-)
+
+diff --git a/fs/inode.c b/fs/inode.c
+index ba7da39be4a3..63a9656bdffe 100644
+--- a/fs/inode.c
++++ b/fs/inode.c
+@@ -2652,6 +2652,22 @@ void __init inode_init_early(void)
+ 
+ void __init inode_init(void)
+ {
++#ifndef CONFIG_RANDSTRUCT
++	/*
++	 * i_data must start on a cacheline boundary: address_space keeps its
++	 * read-mostly fields at its front, and they must not share a line with
++	 * the write-hot inode refcounts that precede i_data. This holds by
++	 * placement rather than by padding - the cold i_devices/i_pipe unions
++	 * sit in front of i_data for exactly that purpose - so it is one field
++	 * insertion away from being silently undone. Fail the build instead.
++	 *
++	 * struct inode is __randomize_layout, so on hardened configs the
++	 * compiler shuffles these fields anyway and the assert cannot hold;
++	 * the optimisation is a no-op there too.
++	 */
++	BUILD_BUG_ON(offsetof(struct inode, i_data) % SMP_CACHE_BYTES != 0);
++#endif
++
+ 	/* inode slab cache */
+ 	inode_cachep = kmem_cache_create("inode_cache",
+ 					 sizeof(struct inode),
+diff --git a/include/linux/fs.h b/include/linux/fs.h
+index 6b3b577d310a..346d005d1918 100644
+--- a/include/linux/fs.h
++++ b/include/linux/fs.h
+@@ -873,7 +873,17 @@ struct inode {
+ #if defined(CONFIG_IMA) || defined(CONFIG_FILE_LOCKING)
+ 	atomic_t		i_readcount; /* struct files open RO */
+ #endif
+-	struct address_space	i_data;
++	/*
++	 * These two are cold for a regular file: one is meaningful only for
++	 * device inodes, the other only for pipes, character devices and
++	 * symlinks, and both are set at inode setup. They sit here, between
++	 * the write-hot refcounts above and i_data below, for two reasons:
++	 * they are exactly the 24 bytes that put i_data on a cacheline
++	 * boundary, and being cold they are harmless company for whichever
++	 * group ends up sharing a line with them.
++	 *
++	 * Keep this block 24 bytes. See the comment on i_data.
++	 */
+ 	union {
+ 		struct list_head	i_devices;
+ 		int			i_linklen;
+@@ -885,6 +895,15 @@ struct inode {
+ 		unsigned		i_dir_seq;
+ 	};
+ 
++	/*
++	 * Starts on a cacheline boundary, given the cold block above and
++	 * SLAB_HWCACHE_ALIGN on inode_cache. address_space groups its
++	 * read-mostly fields at its front, and without this they would share
++	 * a line with the write-hot inode refcounts above, so iget()/iput()
++	 * traffic would invalidate a_ops for every CPU faulting on the file.
++	 */
++	struct address_space	i_data;
++
+ 
+ #ifdef CONFIG_FSNOTIFY
+ 	__u32			i_fsnotify_mask; /* all events this inode cares about */
+-- 
+2.53.0
+

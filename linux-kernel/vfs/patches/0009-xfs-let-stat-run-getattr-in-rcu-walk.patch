@@ -1,0 +1,48 @@
+From 80ac64f6f3f8a24e34cae5cbcd288c429263d09c Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:27:20 +0200
+Subject: [PATCH] xfs: let stat() run ->getattr in rcu-walk
+
+Set IOP_GETATTR_RCU in xfs_setup_iops(), which every xfs inode passes
+through and where all four inode_operations tables, each with
+xfs_vn_getattr(), are installed.
+
+xfs_vn_getattr() reads the xfs_inode (size, block counts, crtime,
+diflags, extent size hint), the xfs_mount (feature bits, block size,
+stripe geometry, atomic write limits) and, for STATX_DIOALIGN and
+STATX_WRITE_ATOMIC, the buftarg's block device limits. It takes no
+lock and no reference, and its one call out is a tracepoint. So it
+qualifies as it is; the helpers it uses - xfs_report_dioalign(),
+xfs_report_atomic_write(), xfs_get_atomic_write_{min,max,max_opt}(),
+xfs_stat_blksize() - are the same kind of reads.
+
+xfs reuses inode memory: a reclaimed xfs_inode can be recycled for
+another inode number by xfs_iget_recycle() without an RCU grace period,
+so a ->getattr running in rcu-walk may read a half-reinitialised inode.
+That is already true of the rcu-walk itself, which reads i_mode and
+i_opflags the same way; the values are garbage but every pointer
+followed - i_mount, the buftarg, the superblock - is stable for the
+life of the mount, and the VFS discards the result because the dentry's
+sequence count has moved.
+---
+ fs/xfs/xfs_iops.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/fs/xfs/xfs_iops.c b/fs/xfs/xfs_iops.c
+index d1306e723899..549c1d179475 100644
+--- a/fs/xfs/xfs_iops.c
++++ b/fs/xfs/xfs_iops.c
+@@ -1510,4 +1510,10 @@ xfs_setup_iops(
+ 		init_special_inode(inode, inode->i_mode, inode->i_rdev);
+ 		break;
+ 	}
++
++	/*
++	 * Every table above uses xfs_vn_getattr(), which only reads the
++	 * inode, the mount and the buftarg limits. See the flag's definition.
++	 */
++	inode->i_opflags |= IOP_GETATTR_RCU;
+ }
+-- 
+2.53.0
+

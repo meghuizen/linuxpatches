@@ -1,0 +1,6 @@
+name = "vfsproof"
+version = "0.1.0"
+defaultTargets = ["Vfsproof"]
+
+[[lean_lib]]
+name = "Vfsproof"

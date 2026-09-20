@@ -1,0 +1,228 @@
+From e0772380fc9277b384683e0e60a9825b6155b81c Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:17:19 +0200
+Subject: [PATCH] fs: allocate the struct file only once an open can no longer
+ fail cheaply
+
+path_openat() allocates the struct file before it starts the path walk,
+and frees it again if the walk fails. The walk is where an open fails:
+ENOENT, EACCES, ENOTDIR, EISDIR, ELOOP and EEXIST are all decided before
+anything has needed a struct file. Each of those failures therefore pays
+for alloc_empty_file() and fput_close() in full: a slab allocation from
+filp_cache and, on kernels with an LSM that keeps per-file state, a
+second one for the security blob, a get_cred()/put_cred() pair on the
+task's credentials, the nr_files percpu counter twice, security_file_alloc()
+and security_file_free(), and the memsets in init_file(). That is on the
+order of three hundred instructions and two atomic operations per failed
+open, one of them on cred->usage, which every thread of the process
+shares.
+
+Failed opens are not the exception they sound like. A compiler probes
+each include directory with open() until one hits; the dynamic loader
+does the same along its search path; shells, interpreters and
+configuration readers try a list of locations in order. On the traces
+behind this series a build spends a visible fraction of its opens
+failing on purpose.
+
+The same allocation is also thrown away on every fall back from
+rcu-walk to ref-walk and on every -ESTALE retry, because do_file_open()
+calls path_openat() up to three times and each call allocated its own
+file.
+
+So allocate later. The walk itself never touches the struct file. The
+first thing that needs one is lookup_open(), because it may create and
+because ->atomic_open() opens into it; open_last_lookups() allocates
+there, once it is in ref-walk. On the common path - no O_CREAT, the
+dcache had the answer - nothing needs one until do_open() has passed
+may_open() and is about to call vfs_open(); it allocates there. Every
+error return before those two points now happens with no file to free.
+
+path_openat() and do_open() take a struct file ** so that whichever of
+the two allocates hands it back; the caller frees it on error as before.
+do_open() reads f_mode once at entry, treating a NULL file as one with
+neither FMODE_OPENED nor FMODE_CREATED set, which is exactly what it is:
+a file lookup_open() never needed. The O_TMPFILE and O_PATH paths, which
+call into their own helpers with the file, allocate up front as before.
+
+alloc_empty_file() used to read the flags back out of file->f_flags for
+the O_TMPFILE/O_PATH dispatch; that comes from op->open_flag now, which
+is where f_flags was initialised from.
+
+One visible change in ordering: an open that would fail in the walk on
+a system at the file-max limit now returns the walk's error rather than
+ENFILE. Both are correct answers to a request that cannot succeed; the
+walk's is the more useful one.
+
+No change to the success path beyond the position of the allocation:
+security_file_alloc() still runs in the opening task's context with the
+same credentials, and the file is fully initialised before anything
+outside path_openat() sees it.
+---
+ fs/namei.c | 86 +++++++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 66 insertions(+), 20 deletions(-)
+
+diff --git a/fs/namei.c b/fs/namei.c
+index 69aba5e1a02e..0cff9ff187db 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -4732,9 +4732,10 @@ static struct dentry *lookup_fast_for_open(struct nameidata *nd, int open_flag)
+ }
+ 
+ static const char *open_last_lookups(struct nameidata *nd,
+-		   struct file *file, const struct open_flags *op)
++		   struct file **filep, const struct open_flags *op)
+ {
+ 	int open_flag = op->open_flag;
++	struct file *file;
+ 	struct dentry *dentry;
+ 	const char *res;
+ 
+@@ -4764,6 +4765,20 @@ static const char *open_last_lookups(struct nameidata *nd,
+ 		}
+ 	}
+ 
++	/*
++	 * lookup_open() is the first thing that needs the struct file: it
++	 * may create, and ->atomic_open() opens into it. Everything up to
++	 * here - and the whole walk when the dcache already knows the answer
++	 * - ran without one. We are in ref-walk by now, so GFP_KERNEL is fine.
++	 */
++	file = *filep;
++	if (!file) {
++		file = alloc_empty_file(open_flag, current_cred());
++		if (IS_ERR(file))
++			return ERR_CAST(file);
++		*filep = file;
++	}
++
+ 	dentry = lookup_open(nd, file, op);
+ 	if (IS_ERR(dentry))
+ 		return ERR_CAST(dentry);
+@@ -4787,24 +4802,27 @@ static const char *open_last_lookups(struct nameidata *nd,
+  * Handle the last step of open()
+  */
+ static int do_open(struct nameidata *nd,
+-		   struct file *file, const struct open_flags *op)
++		   struct file **filep, const struct open_flags *op)
+ {
++	struct file *file = *filep;
+ 	struct mnt_idmap *idmap;
+ 	int open_flag = op->open_flag;
++	/* a NULL file is one that lookup_open() never needed: not created, not opened */
++	fmode_t f_mode = file ? file->f_mode : 0;
+ 	bool do_truncate;
+ 	int acc_mode;
+ 	int error;
+ 
+-	if (!(file->f_mode & (FMODE_OPENED | FMODE_CREATED))) {
++	if (!(f_mode & (FMODE_OPENED | FMODE_CREATED))) {
+ 		error = complete_walk(nd);
+ 		if (error)
+ 			return error;
+ 	}
+-	if (!(file->f_mode & FMODE_CREATED))
++	if (!(f_mode & FMODE_CREATED))
+ 		audit_inode(nd->name, nd->path.dentry, 0);
+ 	idmap = mnt_idmap(nd->path.mnt);
+ 	if (open_flag & O_CREAT) {
+-		if ((open_flag & O_EXCL) && !(file->f_mode & FMODE_CREATED))
++		if ((open_flag & O_EXCL) && !(f_mode & FMODE_CREATED))
+ 			return -EEXIST;
+ 		if (d_is_dir(nd->path.dentry))
+ 			return -EISDIR;
+@@ -4822,7 +4840,7 @@ static int do_open(struct nameidata *nd,
+ 
+ 	do_truncate = false;
+ 	acc_mode = op->acc_mode;
+-	if (file->f_mode & FMODE_CREATED) {
++	if (f_mode & FMODE_CREATED) {
+ 		/* Don't check for write permission, don't truncate */
+ 		open_flag &= ~O_TRUNC;
+ 		acc_mode = 0;
+@@ -4833,7 +4851,25 @@ static int do_open(struct nameidata *nd,
+ 		do_truncate = true;
+ 	}
+ 	error = may_open(idmap, &nd->path, acc_mode, open_flag);
+-	if (!error && !(file->f_mode & FMODE_OPENED)) {
++	if (!error && !(f_mode & FMODE_OPENED)) {
++		/*
++		 * This is the first point on the plain path (no O_CREAT, the
++		 * dcache had the answer) where a struct file is needed, and
++		 * every way of failing before it has been tried. Every open
++		 * that fails with ENOENT, EACCES, EISDIR, ENOTDIR, ELOOP or
++		 * EEXIST returns above without ever allocating one.
++		 */
++		if (!file) {
++			file = alloc_empty_file(op->open_flag, current_cred());
++			if (IS_ERR(file)) {
++				error = PTR_ERR(file);
++				file = NULL;
++			} else {
++				*filep = file;
++			}
++		}
++	}
++	if (!error && !(f_mode & FMODE_OPENED)) {
+ 		/*
+ 		 * Hand the walk's reference on the dentry to the file instead
+ 		 * of having a second one taken and dropping ours a moment
+@@ -4993,33 +5029,43 @@ static int do_o_path(struct nameidata *nd, unsigned flags, struct file *file)
+ static struct file *path_openat(struct nameidata *nd,
+ 			const struct open_flags *op, unsigned flags)
+ {
+-	struct file *file;
++	struct file *file = NULL;
+ 	int error;
+ 
+-	file = alloc_empty_file(op->open_flag, current_cred());
+-	if (IS_ERR(file))
+-		return file;
+-
+-	if (unlikely(file->f_flags & __O_TMPFILE)) {
+-		error = do_tmpfile(nd, flags, op, file);
+-	} else if (unlikely(file->f_flags & O_PATH)) {
+-		error = do_o_path(nd, flags, file);
++	if (unlikely(op->open_flag & (__O_TMPFILE | O_PATH))) {
++		file = alloc_empty_file(op->open_flag, current_cred());
++		if (IS_ERR(file))
++			return file;
++		if (op->open_flag & __O_TMPFILE)
++			error = do_tmpfile(nd, flags, op, file);
++		else
++			error = do_o_path(nd, flags, file);
+ 	} else {
++		/*
++		 * No struct file yet. The walk does not need one, and it is
++		 * the walk that fails when an open fails: the file is
++		 * allocated by open_last_lookups() when the last component
++		 * has to be looked up or created, or by do_open() once
++		 * everything short of calling into the filesystem has passed.
++		 * A retry in ref-walk (-ECHILD) or with LOOKUP_REVAL
++		 * (-ESTALE) starts over with no file to throw away.
++		 */
+ 		const char *s = path_init(nd, flags);
+ 		while (!(error = link_path_walk(s, nd)) &&
+-		       (s = open_last_lookups(nd, file, op)) != NULL)
++		       (s = open_last_lookups(nd, &file, op)) != NULL)
+ 			;
+ 		if (!error)
+-			error = do_open(nd, file, op);
++			error = do_open(nd, &file, op);
+ 		terminate_walk(nd);
+ 	}
+ 	if (likely(!error)) {
+-		if (likely(file->f_mode & FMODE_OPENED))
++		if (likely(file && (file->f_mode & FMODE_OPENED)))
+ 			return file;
+ 		WARN_ON(1);
+ 		error = -EINVAL;
+ 	}
+-	fput_close(file);
++	if (file)
++		fput_close(file);
+ 	if (error == -EOPENSTALE) {
+ 		if (flags & LOOKUP_RCU)
+ 			error = -ECHILD;
+-- 
+2.53.0
+

@@ -1,0 +1,175 @@
+From c30c01a3225d213441f2ff62925e2b55314c1eaa Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:15:46 +0200
+Subject: [PATCH] fs: don't pin the filesystem module per open when the mount
+ already does
+
+do_dentry_open() takes a reference on the module that owns ->i_fop with
+fops_get(), and __fput() drops it with fops_put(). For a regular file on
+a filesystem built as a module that is the filesystem's own module, and
+it is already pinned for as long as the file exists: the file holds
+f_path.mnt, the mount holds the superblock active, and the superblock
+holds a reference on its file_system_type's module from sget_fc() until
+deactivate_locked_super() drops it with put_filesystem(). The per-open
+reference adds nothing.
+
+It is not free, either. try_module_get() is a cmpxchg loop on
+module->refcnt and module_put() is another, and module->refcnt is one
+word for the whole machine. Every open() and every close() on a modular
+filesystem therefore does two atomic read-modify-writes on one cacheline
+shared by every CPU, regardless of which file it is opening. The
+filesystems this affects are the ones distributions build as modules:
+xfs, btrfs, nfs, cifs, overlayfs, fuse, and on some of them ext4 too.
+Nothing else on the open path is contended that widely: the dentry and
+inode counters are shared only by the openers of one object, the fd
+table lock only by the threads of one process.
+
+So when ->i_fop->owner is the same module as i_sb->s_type->owner, set
+f_op without taking a reference and record that in a new f_mode bit,
+FMODE_FOPS_BORROWED. file_put_fops() checks the bit and either clears it
+or calls fops_put(), and replaces the two fops_put() calls on f_op: the
+one in __fput() and the one on do_dentry_open()'s error path.
+
+replace_fops() is the third place that releases the reference on the old
+f_op, from ->open() instances that substitute their own operations
+(chrdev_open(), debugfs, misc devices, drm, sound). It now goes through
+file_put_fops() too, so a borrowed f_op is simply forgotten and the new
+one carries whatever reference the caller took for it, as before. In
+practice none of those callers see a borrowed f_op, because their
+inodes' ->i_fop (def_chr_fops, the debugfs proxies) are built in and
+have no owner, but the macro should not depend on that.
+
+The remaining ways f_op changes after open are direct assignments:
+cifs switches between its own operation tables, memory_open(),
+tty_open() and snd_card_disconnect() switch between built-in tables. In
+each case the new f_op has the same owner as the old one, so a set bit
+stays correct and a clear bit stays correct.
+
+Files that never pass through do_dentry_open() (alloc_file_pseudo() and
+friends set f_op directly and their callers take the module reference
+themselves) never have the bit set and are unaffected.
+
+Where the owners differ - a filesystem whose inodes carry file
+operations from another module - the reference is taken exactly as
+before. Where ->i_fop has no owner the check fails on the NULL owner
+and fops_get() is called as before, which does nothing.
+
+The try_module_get() failure case, a module in the GOING state, cannot
+occur for a borrowed f_op: a module with a mounted superblock cannot be
+unloaded, because that superblock's reference keeps module->refcnt above
+its base.
+
+For the filesystem that motivated looking at this, will-it-scale's
+same-file open/close loop on a modular filesystem does two fewer atomic
+operations on a machine-wide cacheline per iteration; on a built-in
+filesystem nothing changes.
+---
+ fs/file_table.c    |  2 +-
+ fs/open.c          | 22 ++++++++++++++++++++--
+ include/linux/fs.h | 23 +++++++++++++++++++++--
+ 3 files changed, 42 insertions(+), 5 deletions(-)
+
+diff --git a/fs/file_table.c b/fs/file_table.c
+index c68b8c0a4097..9a3f6a569165 100644
+--- a/fs/file_table.c
++++ b/fs/file_table.c
+@@ -514,7 +514,7 @@ static void __fput(struct file *file)
+ 		     !(mode & FMODE_PATH))) {
+ 		cdev_put(inode->i_cdev);
+ 	}
+-	fops_put(file->f_op);
++	file_put_fops(file);
+ 	file_f_owner_release(file);
+ 	put_file_access(file);
+ 	dput(dentry);
+diff --git a/fs/open.c b/fs/open.c
+index 85076e4575be..ccaea49e86ac 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -976,7 +976,25 @@ static int do_dentry_open(struct file *f,
+ 	if (S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode))
+ 		f->f_mode |= FMODE_ATOMIC_POS;
+ 
+-	f->f_op = fops_get(inode->i_fop);
++	/*
++	 * fops_get() pins the module that owns ->i_fop. When that is the
++	 * module implementing the filesystem itself, f_path.mnt already pins
++	 * it: the mount holds the superblock active and the superblock holds
++	 * a reference on its file_system_type's module from sget_fc() until
++	 * deactivate_locked_super(). Borrow that instead of taking our own.
++	 *
++	 * This is not a micro-optimisation. try_module_get() and module_put()
++	 * are cmpxchg loops on module->refcnt, one word for the whole machine
++	 * per module, so on a filesystem built as a module every open() and
++	 * every close() on every CPU contends on the same cacheline. Nothing
++	 * else on the open path is shared that widely.
++	 */
++	f->f_op = inode->i_fop;
++	if (likely(f->f_op && f->f_op->owner &&
++		   f->f_op->owner == inode->i_sb->s_type->owner))
++		f->f_mode |= FMODE_FOPS_BORROWED;
++	else
++		f->f_op = fops_get(inode->i_fop);
+ 	if (WARN_ON(!f->f_op)) {
+ 		error = -ENODEV;
+ 		goto cleanup_all;
+@@ -1034,7 +1052,7 @@ static int do_dentry_open(struct file *f,
+ cleanup_all:
+ 	if (WARN_ON_ONCE(error > 0))
+ 		error = -EINVAL;
+-	fops_put(f->f_op);
++	file_put_fops(f);
+ 	put_file_access(f);
+ cleanup_file:
+ 	path_put(&f->f_path);
+diff --git a/include/linux/fs.h b/include/linux/fs.h
+index f9d1e05e8ae6..fd56dab9c244 100644
+--- a/include/linux/fs.h
++++ b/include/linux/fs.h
+@@ -121,7 +121,13 @@ typedef int (dio_iodone_t)(struct kiocb *iocb, loff_t offset,
+ /* File supports atomic writes */
+ #define FMODE_CAN_ATOMIC_WRITE	((__force fmode_t)(1 << 7))
+ 
+-/* FMODE_* bit 8 */
++/*
++ * f_op belongs to the module that implements the filesystem f_path.mnt is
++ * on, and that module is already pinned for the life of the file by the
++ * mount, so no module reference of our own was taken.  See do_dentry_open()
++ * and file_put_fops().
++ */
++#define FMODE_FOPS_BORROWED	((__force fmode_t)(1 << 8))
+ 
+ /* 32bit hashes as llseek() offset (for directories) */
+ #define FMODE_32BITHASH         ((__force fmode_t)(1 << 9))
+@@ -2356,6 +2362,19 @@ struct super_block *sget_dev(struct fs_context *fc, dev_t dev);
+ 		module_put((_fops)->owner);				\
+ })
+ 
++/*
++ * Drop the module reference do_dentry_open() took for file->f_op, if it
++ * took one: when f_op is owned by the filesystem's own module the mount
++ * already pins that module and no reference was taken (FMODE_FOPS_BORROWED).
++ */
++#define file_put_fops(_f) ({						\
++	struct file *__file_pf = (_f);					\
++	if (likely(__file_pf->f_mode & FMODE_FOPS_BORROWED))		\
++		__file_pf->f_mode &= ~FMODE_FOPS_BORROWED;		\
++	else								\
++		fops_put(__file_pf->f_op);				\
++})
++
+ /*
+  * This one is to be used *ONLY* from ->open() instances.
+  * fops must be non-NULL, pinned down *and* module dependencies
+@@ -2364,7 +2383,7 @@ struct super_block *sget_dev(struct fs_context *fc, dev_t dev);
+ #define replace_fops(f, fops) \
+ 	do {	\
+ 		struct file *__file = (f); \
+-		fops_put(__file->f_op); \
++		file_put_fops(__file); \
+ 		BUG_ON(!(__file->f_op = (fops))); \
+ 	} while(0)
+ 
+-- 
+2.53.0
+

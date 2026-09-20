@@ -1,0 +1,348 @@
+From 37831fd1a937d73389e716410db61b9174e77701 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:21:02 +0200
+Subject: [PATCH] lsm: add inode_getattr_rcu, the rcu-walk counterpart of
+ inode_getattr
+
+stat() is the one path-based syscall whose operation does not need the
+object pinned: it reads a few dozen bytes out of an inode that RCU
+already keeps in memory. The VFS still leaves rcu-walk at the end of
+every stat, because the only way it has to hand a struct path to
+security_inode_getattr() and ->getattr() is with references taken. On a
+dentry many CPUs stat at once - a shared library, a directory a build
+tree stats a thousand times - those two atomic operations on the
+dentry's cacheline are the whole cost of the syscall that scales.
+
+A later patch lets the VFS answer a stat without leaving rcu-walk when
+the filesystem says its ->getattr can run there. That needs the LSM
+check to run there too. This adds the hook for it.
+
+inode_getattr_rcu takes the same struct path as inode_getattr, but is
+called under rcu_read_lock() with nothing pinned: the dentry and mount
+are RCU-protected memory whose contents may be changing under the hook,
+and the VFS discards the whole result if the dentry's sequence count
+moved. The hook may not sleep and may not take a reference it cannot
+drop without sleeping. It returns 0 to allow, -ECHILD if it cannot
+decide under those rules - the VFS then redoes the stat in ref-walk and
+asks inode_getattr - or another error to deny. This is the same contract
+inode_permission has had with MAY_NOT_BLOCK, and inode_follow_link with
+its rcu argument, for years; SELinux already answers both from RCU.
+
+Because the default return is 0 and call_int_hook() stops at the first
+non-zero answer, every active LSM that provides the hook sees the call
+and any of them can deny or defer.
+
+An LSM that hooks inode_getattr without providing inode_getattr_rcu
+would be bypassed by a stat answered in rcu-walk. security_add_hooks()
+detects that at registration and disables the rcu variant for the whole
+system with a static key, so the VFS falls back to ref-walk exactly as
+today. SELinux gets an implementation in the next patch; AppArmor,
+Smack and TOMOYO hook inode_getattr and do not provide the variant, so
+on kernels running them nothing changes until they do.
+
+The BPF LSM registers a stub for every hook, including this one, and
+programs attach to those stubs. A program attached to inode_getattr may
+be sleepable, and in any case must see every stat, so the BPF LSM's
+entry for inode_getattr_rcu is a gate: while anything is attached to
+inode_getattr it returns -ECHILD, otherwise it calls the real stub,
+which programs may attach to in turn. Those programs run under RCU, and
+the verifier already refuses sleepable programs on hooks not listed as
+sleepable, which this one is not. The trampoline code maintains the
+attachment count, incrementing before the hook's text is patched on
+attach and decrementing after it is restored on detach, so there is no
+window in which an attached program is skipped.
+
+No caller yet; that is the next patches.
+---
+ include/linux/bpf_lsm.h       | 12 ++++++++++
+ include/linux/lsm_hook_defs.h |  1 +
+ include/linux/security.h      |  6 +++++
+ kernel/bpf/bpf_lsm.c          | 21 ++++++++++++++++++
+ kernel/bpf/trampoline.c       | 12 ++++++++--
+ security/bpf/hooks.c          | 22 ++++++++++++++++++
+ security/lsm.h                |  3 +++
+ security/lsm_init.c           | 16 +++++++++++++
+ security/security.c           | 42 +++++++++++++++++++++++++++++++++++
+ 9 files changed, 133 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/bpf_lsm.h b/include/linux/bpf_lsm.h
+index dda272d78f01..556eb7a15cc1 100644
+--- a/include/linux/bpf_lsm.h
++++ b/include/linux/bpf_lsm.h
+@@ -33,6 +33,9 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
+ bool bpf_lsm_is_sleepable_hook(u32 btf_id);
+ bool bpf_lsm_is_trusted(const struct bpf_prog *prog);
+ 
++void bpf_lsm_prog_attached(void *hook_addr, bool attached);
++bool bpf_lsm_inode_getattr_has_progs(void);
++
+ static inline struct bpf_storage_blob *bpf_inode(
+ 	const struct inode *inode)
+ {
+@@ -58,6 +61,15 @@ bool bpf_lsm_hook_returns_errno(u32 btf_id);
+ 
+ #else /* !CONFIG_BPF_LSM */
+ 
++static inline void bpf_lsm_prog_attached(void *hook_addr, bool attached)
++{
++}
++
++static inline bool bpf_lsm_inode_getattr_has_progs(void)
++{
++	return false;
++}
++
+ #define bpf_lsm_initialized false
+ 
+ static inline bool bpf_lsm_is_sleepable_hook(u32 btf_id)
+diff --git a/include/linux/lsm_hook_defs.h b/include/linux/lsm_hook_defs.h
+index 65c9609ec207..764a11069447 100644
+--- a/include/linux/lsm_hook_defs.h
++++ b/include/linux/lsm_hook_defs.h
+@@ -145,6 +145,7 @@ LSM_HOOK(int, 0, inode_setattr, struct mnt_idmap *idmap, struct dentry *dentry,
+ LSM_HOOK(void, LSM_RET_VOID, inode_post_setattr, struct mnt_idmap *idmap,
+ 	 struct dentry *dentry, int ia_valid)
+ LSM_HOOK(int, 0, inode_getattr, const struct path *path)
++LSM_HOOK(int, 0, inode_getattr_rcu, const struct path *path)
+ LSM_HOOK(int, 0, inode_xattr_skipcap, const char *name)
+ LSM_HOOK(int, 0, inode_setxattr, struct mnt_idmap *idmap,
+ 	 struct dentry *dentry, const char *name, const void *value,
+diff --git a/include/linux/security.h b/include/linux/security.h
+index 153e9043058f..93a2400fc638 100644
+--- a/include/linux/security.h
++++ b/include/linux/security.h
+@@ -427,6 +427,7 @@ int security_inode_setattr(struct mnt_idmap *idmap,
+ void security_inode_post_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+ 				 int ia_valid);
+ int security_inode_getattr(const struct path *path);
++int security_inode_getattr_rcu(const struct path *path);
+ int security_inode_setxattr(struct mnt_idmap *idmap,
+ 			    struct dentry *dentry, const char *name,
+ 			    const void *value, size_t size, int flags);
+@@ -996,6 +997,11 @@ static inline int security_inode_getattr(const struct path *path)
+ 	return 0;
+ }
+ 
++static inline int security_inode_getattr_rcu(const struct path *path)
++{
++	return 0;
++}
++
+ static inline int security_inode_setxattr(struct mnt_idmap *idmap,
+ 		struct dentry *dentry, const char *name, const void *value,
+ 		size_t size, int flags)
+diff --git a/kernel/bpf/bpf_lsm.c b/kernel/bpf/bpf_lsm.c
+index 82c5988417a0..6c915624c99b 100644
+--- a/kernel/bpf/bpf_lsm.c
++++ b/kernel/bpf/bpf_lsm.c
+@@ -30,6 +30,27 @@ __weak noinline RET bpf_lsm_##NAME(__VA_ARGS__)	\
+ #include <linux/lsm_hook_defs.h>
+ #undef LSM_HOOK
+ 
++/*
++ * Some hooks have an rcu-walk variant that the VFS calls instead of the
++ * sleeping one, see security_inode_getattr_rcu(). Programs attached to the
++ * sleeping hook must still see every call, so security/bpf/hooks.c gates the
++ * rcu-walk variant on whether anything is attached to its sleeping
++ * counterpart. The trampoline code keeps the count here, before the hook's
++ * text is patched on attach and after it is restored on detach.
++ */
++static atomic_t bpf_lsm_inode_getattr_progs;
++
++void bpf_lsm_prog_attached(void *hook_addr, bool attached)
++{
++	if (hook_addr == (void *)bpf_lsm_inode_getattr)
++		atomic_add(attached ? 1 : -1, &bpf_lsm_inode_getattr_progs);
++}
++
++bool bpf_lsm_inode_getattr_has_progs(void)
++{
++	return atomic_read(&bpf_lsm_inode_getattr_progs) != 0;
++}
++
+ #define LSM_HOOK(RET, DEFAULT, NAME, ...) BTF_ID(func, bpf_lsm_##NAME)
+ BTF_SET_START(bpf_lsm_hooks)
+ #include <linux/lsm_hook_defs.h>
+diff --git a/kernel/bpf/trampoline.c b/kernel/bpf/trampoline.c
+index 90b70ea0d370..e385972113bc 100644
+--- a/kernel/bpf/trampoline.c
++++ b/kernel/bpf/trampoline.c
+@@ -981,9 +981,14 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_node *node,
+ 	err = bpf_trampoline_add_prog(tr, node, cnt);
+ 	if (err)
+ 		return err;
++	if (resolve_prog_type(node->link->prog) == BPF_PROG_TYPE_LSM)
++		bpf_lsm_prog_attached(tr->func.addr, true);
+ 	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */, ops, data);
+-	if (err)
++	if (err) {
+ 		bpf_trampoline_remove_prog(tr, node);
++		if (resolve_prog_type(node->link->prog) == BPF_PROG_TYPE_LSM)
++			bpf_lsm_prog_attached(tr->func.addr, false);
++	}
+ 	return err;
+ }
+ 
+@@ -1020,7 +1025,10 @@ static int __bpf_trampoline_unlink_prog(struct bpf_tramp_node *node,
+ 		return err;
+ 	}
+ 	bpf_trampoline_remove_prog(tr, node);
+-	return bpf_trampoline_update(tr, true /* lock_direct_mutex */, ops, data);
++	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */, ops, data);
++	if (resolve_prog_type(node->link->prog) == BPF_PROG_TYPE_LSM)
++		bpf_lsm_prog_attached(tr->func.addr, false);
++	return err;
+ }
+ 
+ /* bpf_trampoline_unlink_prog() should never fail. */
+diff --git a/security/bpf/hooks.c b/security/bpf/hooks.c
+index 7b98f5d1e2be..8a978d3bff02 100644
+--- a/security/bpf/hooks.c
++++ b/security/bpf/hooks.c
+@@ -17,6 +17,21 @@ static struct security_hook_list bpf_lsm_hooks[] __ro_after_init = {
+ 	LSM_HOOK_INIT(inode_free_security, bpf_inode_storage_free),
+ };
+ 
++/*
++ * The VFS calls inode_getattr_rcu under rcu_read_lock() in place of
++ * inode_getattr when it can answer a stat without taking references. A program
++ * attached to inode_getattr may be sleepable and in any case expects to see
++ * every stat, so while one is attached send the VFS to the sleeping path.
++ * Otherwise let programs attached to inode_getattr_rcu itself decide; the
++ * verifier does not allow those to be sleepable.
++ */
++static int bpf_lsm_inode_getattr_rcu_gate(const struct path *path)
++{
++	if (bpf_lsm_inode_getattr_has_progs())
++		return -ECHILD;
++	return bpf_lsm_inode_getattr_rcu(path);
++}
++
+ static const struct lsm_id bpf_lsmid = {
+ 	.name = "bpf",
+ 	.id = LSM_ID_BPF,
+@@ -24,6 +39,13 @@ static const struct lsm_id bpf_lsmid = {
+ 
+ static int __init bpf_lsm_init(void)
+ {
++	int i;
++
++	for (i = 0; i < ARRAY_SIZE(bpf_lsm_hooks); i++)
++		if (bpf_lsm_hooks[i].scalls == static_calls_table.inode_getattr_rcu)
++			bpf_lsm_hooks[i].hook.inode_getattr_rcu =
++				bpf_lsm_inode_getattr_rcu_gate;
++
+ 	security_add_hooks(bpf_lsm_hooks, ARRAY_SIZE(bpf_lsm_hooks),
+ 			   &bpf_lsmid);
+ 	bpf_lsm_initialized = true;
+diff --git a/security/lsm.h b/security/lsm.h
+index 32f808ad4335..d9a471c3d7eb 100644
+--- a/security/lsm.h
++++ b/security/lsm.h
+@@ -27,6 +27,9 @@ extern const struct lsm_id *lsm_idlist[];
+ /* LSM blob configuration */
+ extern struct lsm_blob_sizes blob_sizes;
+ 
++/* Hooks with an rcu-walk variant that every hooking LSM must provide */
++DECLARE_STATIC_KEY_TRUE(security_inode_getattr_rcu_ok);
++
+ /* LSM blob caches */
+ extern struct kmem_cache *lsm_file_cache;
+ extern struct kmem_cache *lsm_backing_file_cache;
+diff --git a/security/lsm_init.c b/security/lsm_init.c
+index a1ad641811de..91001a2c82c6 100644
+--- a/security/lsm_init.c
++++ b/security/lsm_init.c
+@@ -369,6 +369,7 @@ static int __init lsm_static_call_init(struct security_hook_list *hl)
+ void __init security_add_hooks(struct security_hook_list *hooks, int count,
+ 			       const struct lsm_id *lsmid)
+ {
++	bool getattr = false, getattr_rcu = false;
+ 	int i;
+ 
+ 	for (i = 0; i < count; i++) {
+@@ -376,6 +377,21 @@ void __init security_add_hooks(struct security_hook_list *hooks, int count,
+ 		if (lsm_static_call_init(&hooks[i]))
+ 			panic("exhausted LSM callback slots with LSM %s\n",
+ 			      lsmid->name);
++		if (hooks[i].scalls == static_calls_table.inode_getattr)
++			getattr = true;
++		if (hooks[i].scalls == static_calls_table.inode_getattr_rcu)
++			getattr_rcu = true;
++	}
++
++	/*
++	 * An LSM that decides on inode_getattr but cannot do so in rcu-walk
++	 * has to see every stat, so the rcu-walk stat path is turned off for
++	 * everyone rather than around it. See security_inode_getattr_rcu().
++	 */
++	if (getattr && !getattr_rcu) {
++		static_branch_disable(&security_inode_getattr_rcu_ok);
++		lsm_pr_dbg("%s has no inode_getattr_rcu, stat stays in ref-walk\n",
++			   lsmid->name);
+ 	}
+ }
+ 
+diff --git a/security/security.c b/security/security.c
+index 2ee276ab15c5..7429340b197d 100644
+--- a/security/security.c
++++ b/security/security.c
+@@ -85,6 +85,14 @@ struct kmem_cache *lsm_file_cache;
+ struct kmem_cache *lsm_backing_file_cache;
+ struct kmem_cache *lsm_inode_cache;
+ 
++/*
++ * security_inode_getattr_rcu() may only stand in for security_inode_getattr()
++ * if every LSM that hooks the latter also hooks the former; otherwise a stat
++ * answered in rcu-walk would slip past the one that does not. Cleared by
++ * security_add_hooks() when such an LSM registers.
++ */
++DEFINE_STATIC_KEY_TRUE(security_inode_getattr_rcu_ok);
++
+ #define SECURITY_HOOK_ACTIVE_KEY(HOOK, IDX) security_hook_active_##HOOK##_##IDX
+ 
+ /*
+@@ -1895,6 +1903,40 @@ int security_inode_getattr(const struct path *path)
+ 	return call_int_hook(inode_getattr, path);
+ }
+ 
++/**
++ * security_inode_getattr_rcu() - Check if getting file attributes is allowed,
++ *                                without leaving rcu-walk
++ * @path: file
++ *
++ * The rcu-walk counterpart of security_inode_getattr(). Called by the VFS
++ * under rcu_read_lock() with @path neither pinned nor referenced: @path->dentry
++ * and @path->mnt are RCU-protected memory whose contents may be changing, and
++ * the caller will discard the result if the dentry's seqcount moved. A hook
++ * must not sleep, must not take a reference it cannot drop without sleeping,
++ * and returns -ECHILD if it cannot decide under those rules; the VFS then
++ * repeats the whole stat in ref-walk and calls security_inode_getattr().
++ *
++ * Any other non-zero return is a final denial. LSMs that implement
++ * inode_getattr but not this hook disable it for the whole system, see
++ * security_add_hooks().
++ *
++ * Return: Returns 0 if permission is granted, -ECHILD to fall back to
++ *         security_inode_getattr(), another negative error to deny.
++ */
++int security_inode_getattr_rcu(const struct path *path)
++{
++	struct inode *inode = d_backing_inode(path->dentry);
++
++	if (!static_branch_likely(&security_inode_getattr_rcu_ok))
++		return -ECHILD;
++	/* nothing is pinned; a concurrent unlink may have cleared d_inode */
++	if (unlikely(!inode))
++		return -ECHILD;
++	if (unlikely(IS_PRIVATE(inode)))
++		return 0;
++	return call_int_hook(inode_getattr_rcu, path);
++}
++
+ /**
+  * security_inode_setxattr() - Check if setting file xattrs is allowed
+  * @idmap: idmap of the mount
+-- 
+2.53.0
+
