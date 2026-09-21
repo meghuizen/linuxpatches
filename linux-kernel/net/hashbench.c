@@ -47,8 +47,10 @@ typedef struct { u64 key[2]; } siphash_key_t;
 #define POSTAMBLE \
 	v3 ^= b; \
 	SIPROUND; \
+	SIPROUND; \
 	v0 ^= b; \
 	v2 ^= 0xff; \
+	SIPROUND; \
 	SIPROUND; \
 	SIPROUND; \
 	SIPROUND; \
@@ -236,4 +238,23 @@ u32 bench_jhash_42u(const void *key, u32 initval)
 {
 	JH_BODY(42)
 	a += k[0]; __jhash_final(a, b, c); return c;
+}
+
+/* ---- expanded-key form: SIPHASH_CONST_i ^ key precomputed ---- */
+typedef struct { u64 v[4]; } siphash_ekey_t;
+
+#define EPREAMBLE(len) \
+	u64 v0 = ekey->v[0]; \
+	u64 v1 = ekey->v[1]; \
+	u64 v2 = ekey->v[2]; \
+	u64 v3 = ekey->v[3]; \
+	u64 b = ((u64)(len)) << 56;
+
+u64 bench_siphash_2u64_ekey(const u64 first, const u64 second,
+			    const siphash_ekey_t *ekey)
+{
+	EPREAMBLE(16)
+	v3 ^= first;  SIPROUND; SIPROUND; v0 ^= first;
+	v3 ^= second; SIPROUND; SIPROUND; v0 ^= second;
+	POSTAMBLE
 }

@@ -1,4 +1,4 @@
-From fdd1d4e1500e51530a5d6205d52a1f62f343f745 Mon Sep 17 00:00:00 2001
+From fc17a66bff6049b8693ff907b8888659a3cc8efb Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 09:59:55 +0200
 Subject: [PATCH 5/8] net: gro: look up the offload before walking the gro list

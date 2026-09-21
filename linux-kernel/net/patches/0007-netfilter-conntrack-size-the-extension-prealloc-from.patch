@@ -1,4 +1,4 @@
-From 39b66a64377b2c4c466a392bcdca9335c8108a9f Mon Sep 17 00:00:00 2001
+From 027380c2806329e8d5f6cba7c329527933d68062 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 10:04:08 +0200
 Subject: [PATCH 7/8] netfilter: conntrack: size the extension prealloc from

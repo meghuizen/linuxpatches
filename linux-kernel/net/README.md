@@ -98,10 +98,14 @@ building a kernel for each. Straight-line instruction counts, padding and
 
 | hash call | x86_64 | i386 | A53 | rv64gc | rv64gc_zbb |
 |---|---|---|---|---|---|
-| conntrack 39 B, 12 SIPROUNDs | 200 | 636 | 157 | 359 | 217 |
-| conntrack 16 B, 8 SIPROUNDs (patch 4) | 133 | 416 | 108 | 245 | 151 |
+| conntrack 39 B, 14 SIPROUNDs | 229 | 733 | 177 | 411 | 245 |
+| conntrack 16 B, 10 SIPROUNDs (patch 4) | 164 | 514 | 128 | 297 | 179 |
 | flowtable 88 B, 7 mixes (today) | 274 | 280 | 184 | 334 | 236 |
 | flowtable 42 B, 3 mixes (patch 3) | 134 | 139 | 94 | 166 | 116 |
+
+siphash is **2-4**: two rounds per eight-byte block and four at the end.
+39 bytes is four blocks plus a tail, so 14 rounds; 16 bytes is two
+blocks, so 10.
 
 Two things fall out of the table.
 
@@ -161,6 +165,21 @@ to five L1-resident loads.
 **Replacing siphash with jhash in conntrack.** The single biggest
 instruction-count win available, and the reason it is there is
 hash-flooding resistance on a box facing the internet. No.
+
+**Precomputing `SIPHASH_CONST_i ^ key` into the key structure.** The
+preamble rebuilds four 64-bit constants on every call: 16 instructions on
+the A53 (`mov` plus three `movk` each), 15 % of `siphash_2u64`. Storing
+them pre-XORed makes the preamble four loads. `sipvalidate.c` confirms it
+is bit-exact — it reproduces the reference vector from
+`lib/tests/siphash_kunit.c` and matches the current form across 40 M
+random key/input pairs — and it saves 19 instructions on the A53 and 26
+on RISC-V. But it saves only **2** on x86_64, where `movabs` is one
+instruction, and the wall-clock benchmark there is **13.6 % slower**: four
+dependent loads cost more than four independent immediates. A change that
+measurably regresses the architecture most maintainers test on, in
+exchange for an instruction count on one that was not timed, is not
+worth proposing. Revisit only with wall-clock numbers from real A53
+hardware.
 
 **Lowering the UDP conntrack timeouts for QUIC.** Already sysctl-tunable.
 A code change would be a behaviour change; this is a tuning note, not a
