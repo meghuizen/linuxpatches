@@ -410,19 +410,29 @@ echo
 
 ########################## client: udp rx wakeup batching ##########################
 echo "### client: UDP RX wakeup batching (client patch 1)"
-echo "  One receiver draining many sockets from epoll, fed as fast as the"
-echo "  sender manages, so datagrams arrive in batches. dgram/wait is the"
-echo "  number that matters: it says how many datagrams one epoll_wait"
-echo "  round-trip collected. The patch changes wakeups per batch, not"
-echo "  throughput, so read that column and not the rate."
+echo "  The patch batches the wakeups __udp_enqueue_schedule_skb() issues for"
+echo "  one queued batch. It can only matter when a batch forms, i.e. when"
+echo "  nb > 1 -- when producers outpace the consumer. ONE sender does not"
+echo "  do that: measured on loopback, one sender to one receiver gives"
+echo "  dgram/wait = 1.1, every datagram its own wakeup, and the patch is"
+echo "  then a no-op by construction."
+echo
+echo "  So sweep sender concurrency against a single receiving socket."
+echo "  dgram/wait is the discriminating number and the only one to read:"
+echo "  a row where it is near 1 measured nothing, whatever its rate says."
 if setup_topology; then
-	for socks in 1 8 32; do
-		ip netns exec $NS_R /tmp/nb epollsink "$socks" $((ITERS / 4)) &
+	for senders in 1 2 6; do
+		[ "$senders" -gt "$(nproc)" ] && continue
+		ip netns exec $NS_R /tmp/nb epollsink 1 $((ITERS / 2)) > /tmp/nbsink.out 2>&1 &
 		SINK=$!
-		sleep 0.4
-		ip netns exec $NS_L /tmp/nb burst "$socks" $((ITERS / 4 / socks)) >/dev/null 2>&1
-		wait $SINK 2>/dev/null
+		sleep 0.5
+		for i in $(seq "$senders"); do
+			ip netns exec $NS_L /tmp/nb burst 1 $((ITERS / 2 / senders)) >/dev/null 2>&1 &
+		done
+		wait
+		printf '  senders=%-3s %s' "$senders" "$(cat /tmp/nbsink.out)"
 	done
+	rm -f /tmp/nbsink.out
 else
 	echo "  topology unavailable -- section skipped"
 fi

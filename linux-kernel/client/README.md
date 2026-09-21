@@ -78,6 +78,15 @@ Patch 1 changes wakeups per batch, not throughput, so its section reports
 Patch 3's effect grows with burst size, so a single point says nothing and
 the section sweeps.
 
+**The patch-1 section had to be rewritten after its first smoke test.** As
+first written it used one sender, and one sender to one receiver measured
+`dgram/wait = 1.1` on loopback -- every datagram getting its own wakeup, no
+batch ever forming, and therefore a section structurally incapable of
+observing the patch. Six concurrent senders against one socket gives
+`dgram/wait = 87.3`, which is the condition `nb > 1` the patch addresses. The
+section now sweeps sender concurrency and says in its own output that a row
+with `dgram/wait` near 1 measured nothing, whatever its rate column says.
+
 ## Status
 
 **Compile-tested only.** Every patch builds its objects cleanly and patch 3's
