@@ -12,6 +12,16 @@ and understand *why* it exists, not only what it touches.
 
 All of it is written against **Linux 7.2, vanilla**.
 
+## Areas
+
+| Area | Contents |
+|---|---|
+| [`vfs/`](vfs/README.md) | The open and stat paths: 15 patches, analysis, Lean proofs |
+| [`sched/`](sched/README.md) | Scheduler cacheline placement: 2 patches, verified on x86_64 and i386 |
+| [`net/`](net/README.md) | The router forwarding path: 7 patches, generic `net/` code only |
+
+The numbered documents below predate that split and stand on their own.
+
 ## Three kinds of documents in here
 
 1. **Ready patches** (1-4) — small, concrete source changes. Reorder fields in

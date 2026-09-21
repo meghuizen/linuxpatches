@@ -1,0 +1,108 @@
+From a2cfb3260ce97a836e4f989f567e1ede0aadc11b Mon Sep 17 00:00:00 2001
+From: kbench <kbench@localhost>
+Date: Mon, 21 Sep 2026 10:02:48 +0200
+Subject: [PATCH 6/7] bridge: skip the proxy ARP path when no port asks for it
+
+br_handle_frame_finish() calls br_do_proxy_suppress_arp() for every ARP
+and RARP frame, unconditionally. The IPv6 neighbour-suppression branch
+two lines below is guarded by BROPT_NEIGH_SUPPRESS_ENABLED; ARP was the
+outlier.
+
+With neither neighbour suppression nor proxy ARP configured on any port,
+the function still pulls and validates the ARP header, parses out the
+addresses, calls neigh_lookup() -- a hash walk plus a refcount take and
+release -- and takes an fdb lookup, and then provably does nothing:
+every path that sets proxyarp_replied is guarded by
+BROPT_NEIGH_SUPPRESS_ENABLED, BR_PROXYARP on the ingress port, or
+BR_PROXYARP_WIFI on the egress port.
+
+Add BROPT_PROXYARP_ENABLED, computed in the walk that already computes
+BROPT_NEIGH_SUPPRESS_ENABLED so there is no new place to forget to call
+it, and return early when neither is set. br_port_flags_change() has to
+recalculate on the proxy ARP bits too, which it did not need to before.
+
+This is a home-network case: ARP is broadcast, so it can never be
+offloaded, and its cost scales with the number of attached devices.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XVxrZjHzxnmyA7MDozho8A
+---
+ net/bridge/br_arp_nd_proxy.c | 23 +++++++++++++++++++++--
+ net/bridge/br_if.c           |  3 ++-
+ net/bridge/br_private.h      |  1 +
+ 3 files changed, 24 insertions(+), 3 deletions(-)
+
+diff --git a/net/bridge/br_arp_nd_proxy.c b/net/bridge/br_arp_nd_proxy.c
+index 87a40e2f1c50..dde6b502f8ef 100644
+--- a/net/bridge/br_arp_nd_proxy.c
++++ b/net/bridge/br_arp_nd_proxy.c
+@@ -28,15 +28,23 @@ void br_recalculate_neigh_suppress_enabled(struct net_bridge *br)
+ {
+ 	struct net_bridge_port *p;
+ 	bool neigh_suppress = false;
++	bool proxyarp = false;
+ 
+ 	list_for_each_entry(p, &br->port_list, list) {
+-		if (READ_ONCE(p->flags) & (BR_NEIGH_SUPPRESS | BR_NEIGH_VLAN_SUPPRESS)) {
++		unsigned long flags = READ_ONCE(p->flags);
++
++		if (flags & (BR_NEIGH_SUPPRESS | BR_NEIGH_VLAN_SUPPRESS))
+ 			neigh_suppress = true;
++
++		if (flags & (BR_PROXYARP | BR_PROXYARP_WIFI))
++			proxyarp = true;
++
++		if (neigh_suppress && proxyarp)
+ 			break;
+-		}
+ 	}
+ 
+ 	br_opt_toggle(br, BROPT_NEIGH_SUPPRESS_ENABLED, neigh_suppress);
++	br_opt_toggle(br, BROPT_PROXYARP_ENABLED, proxyarp);
+ }
+ 
+ #if IS_ENABLED(CONFIG_INET)
+@@ -135,6 +143,17 @@ void br_do_proxy_suppress_arp(struct sk_buff *skb, struct net_bridge *br,
+ 	BR_INPUT_SKB_CB(skb)->proxyarp_replied = 0;
+ 	BR_INPUT_SKB_CB(skb)->grat_arp = 0;
+ 
++	/* Nothing below can do anything unless neighbour suppression or proxy
++	 * ARP is configured on some port: every path that sets
++	 * proxyarp_replied is guarded by one or the other. Leave before
++	 * pulling and parsing the ARP header and taking a reference in
++	 * neigh_lookup(). The IPv6 branch in br_handle_frame_finish() is
++	 * already gated this way; ARP was the outlier.
++	 */
++	if (!br_opt_get(br, BROPT_NEIGH_SUPPRESS_ENABLED) &&
++	    !br_opt_get(br, BROPT_PROXYARP_ENABLED))
++		return;
++
+ 	if ((dev->flags & IFF_NOARP) ||
+ 	    !pskb_may_pull(skb, arp_hdr_len(dev)))
+ 		return;
+diff --git a/net/bridge/br_if.c b/net/bridge/br_if.c
+index c52613431f88..b234d430acd3 100644
+--- a/net/bridge/br_if.c
++++ b/net/bridge/br_if.c
+@@ -752,7 +752,8 @@ void br_port_flags_change(struct net_bridge_port *p, unsigned long mask)
+ 	if (mask & BR_AUTO_MASK)
+ 		nbp_update_port_count(br);
+ 
+-	if (mask & (BR_NEIGH_SUPPRESS | BR_NEIGH_VLAN_SUPPRESS))
++	if (mask & (BR_NEIGH_SUPPRESS | BR_NEIGH_VLAN_SUPPRESS |
++		    BR_PROXYARP | BR_PROXYARP_WIFI))
+ 		br_recalculate_neigh_suppress_enabled(br);
+ }
+ 
+diff --git a/net/bridge/br_private.h b/net/bridge/br_private.h
+index b01997ea9508..c697347e1f71 100644
+--- a/net/bridge/br_private.h
++++ b/net/bridge/br_private.h
+@@ -487,6 +487,7 @@ enum net_bridge_opts {
+ 	BROPT_MULTICAST_STATS_ENABLED,
+ 	BROPT_HAS_IPV6_ADDR,
+ 	BROPT_NEIGH_SUPPRESS_ENABLED,
++	BROPT_PROXYARP_ENABLED,
+ 	BROPT_MTU_SET_BY_USER,
+ 	BROPT_VLAN_STATS_PER_PORT,
+ 	BROPT_NO_LL_LEARN,

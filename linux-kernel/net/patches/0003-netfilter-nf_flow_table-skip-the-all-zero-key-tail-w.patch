@@ -1,0 +1,101 @@
+From 67aa74251cd6ef950a7db749154a01daeaa7b651 Mon Sep 17 00:00:00 2001
+From: kbench <kbench@localhost>
+Date: Mon, 21 Sep 2026 09:55:49 +0200
+Subject: [PATCH 3/7] netfilter: nf_flow_table: skip the all-zero key tail when
+ hashing
+
+flow_offload_hash() jhashes the whole key, up to __hash:
+
+  } encap[2];                        /*  42   8 */
+  struct flow_offload_tunnel tun;    /*  52  36 */
+  } __hash;                          /*  88   0 */
+
+88 bytes, which jhash consumes at 12 bytes per round: seven rounds plus
+the final mix, on every packet that reaches the flowtable. The last 46 of
+those bytes are encap[] and tun, and they are zero for any flow that is
+neither encapsulated nor tunnelled -- on a plain router, every flow.
+
+Hash the 42-byte head alone when the tail is zero: three rounds instead
+of seven.
+
+Equal keys still hash equal. The predicate reads nothing but the key
+bytes, so two identical tuples always take the same branch. A head-only
+key can collide with a full key that shares a head; that is harmless,
+because flow_offload_hash_cmp() still compares every byte up to __hash,
+so a collision costs one comparison and never produces a wrong match.
+
+tun_num and encap_num would be a cheaper predicate but are not usable:
+they live past __hash and so are not part of the key, and a lookup key
+that left them unset while the stored tuple had them set would hash to a
+different bucket and never find the flow. The comment says so, because
+it is an inviting mistake.
+
+This also shortens the tax paid by packets that miss: a short UDP
+exchange never lives long enough to be offloaded, so DNS and QUIC
+handshakes pay the hash on every packet and then fall through to the
+full stack anyway.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XVxrZjHzxnmyA7MDozho8A
+---
+ net/netfilter/nf_flow_table_core.c | 37 ++++++++++++++++++++++++++++--
+ 1 file changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/net/netfilter/nf_flow_table_core.c b/net/netfilter/nf_flow_table_core.c
+index 934c6151f558..87523869b1cd 100644
+--- a/net/netfilter/nf_flow_table_core.c
++++ b/net/netfilter/nf_flow_table_core.c
+@@ -279,18 +279,51 @@ void flow_offload_free(struct flow_offload *flow)
+ }
+ EXPORT_SYMBOL_GPL(flow_offload_free);
+ 
++/* Length of the key to feed to jhash().
++ *
++ * The tail of the key -- encap[] and tun -- is all zero for a flow that is
++ * neither encapsulated nor tunnelled, which on a plain router is every flow.
++ * Hashing it mixes in bytes that are always zero, at one jhash round per 12
++ * bytes, on every packet that reaches the flowtable.
++ *
++ * Hash the head alone when the tail is zero. Equal keys still hash equal:
++ * the predicate reads nothing but the key bytes, so two identical tuples
++ * always take the same branch. A head-only key can collide with a full key
++ * that happens to share a head, and that is harmless --
++ * flow_offload_hash_cmp() still compares every byte up to __hash, so a
++ * collision costs one comparison and never yields a wrong match.
++ *
++ * Do not be tempted to use tun_num/encap_num instead: they live past __hash
++ * and so are not part of the key, and a lookup key that left them unset
++ * while the stored tuple had them set would hash to a different bucket and
++ * the flow would never be found.
++ */
++#define FLOW_OFFLOAD_KEY_HEAD	offsetof(struct flow_offload_tuple, encap)
++#define FLOW_OFFLOAD_KEY_FULL	offsetof(struct flow_offload_tuple, __hash)
++
++static inline u32 flow_offload_key_len(const struct flow_offload_tuple *tuple)
++{
++	const void *tail = (const char *)tuple + FLOW_OFFLOAD_KEY_HEAD;
++
++	if (memchr_inv(tail, 0, FLOW_OFFLOAD_KEY_FULL - FLOW_OFFLOAD_KEY_HEAD))
++		return FLOW_OFFLOAD_KEY_FULL;
++
++	return FLOW_OFFLOAD_KEY_HEAD;
++}
++
+ static u32 flow_offload_hash(const void *data, u32 len, u32 seed)
+ {
+ 	const struct flow_offload_tuple *tuple = data;
+ 
+-	return jhash(tuple, offsetof(struct flow_offload_tuple, __hash), seed);
++	return jhash(tuple, flow_offload_key_len(tuple), seed);
+ }
+ 
+ static u32 flow_offload_hash_obj(const void *data, u32 len, u32 seed)
+ {
+ 	const struct flow_offload_tuple_rhash *tuplehash = data;
+ 
+-	return jhash(&tuplehash->tuple, offsetof(struct flow_offload_tuple, __hash), seed);
++	return jhash(&tuplehash->tuple, flow_offload_key_len(&tuplehash->tuple),
++		     seed);
+ }
+ 
+ static int flow_offload_hash_cmp(struct rhashtable_compare_arg *arg,

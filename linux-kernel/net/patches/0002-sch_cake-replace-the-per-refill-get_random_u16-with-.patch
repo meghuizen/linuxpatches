@@ -1,0 +1,75 @@
+From 1a444de0665e1bad5c3053b631bb393da9e17294 Mon Sep 17 00:00:00 2001
+From: kbench <kbench@localhost>
+Date: Mon, 21 Sep 2026 09:53:12 +0200
+Subject: [PATCH 2/7] sch_cake: replace the per-refill get_random_u16() with a
+ Weyl sequence
+
+cake_get_flow_quantum() dithers the quantum so that the roundoff of the
+division by host_load does not accumulate in one direction. It draws the
+dither from get_random_u16().
+
+That call sits in the deficit refill loop, which runs once per refill,
+i.e. host_load times per dequeued packet. host_load is the number of
+bulk flows behind one host, so a single client speaking QUIC to a busy
+site drives it to tens: with 32 flows the quantum is ~47 bytes and a
+1350-byte packet needs ~29 refills, each drawing entropy, all under the
+qdisc root lock.
+
+An additive Weyl sequence supplies the uniform distribution the
+correction needs with lower discrepancy than random draws, for one add
+and no call. The dither perturbs the quantum by at most one byte and was
+never a fairness guarantee, so nothing is weakened by making it
+deterministic: an adversary can already derive the DRR rotation, which
+is deterministic today.
+
+No UAPI change, no configuration change, no change to the shaped rate.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XVxrZjHzxnmyA7MDozho8A
+---
+ net/sched/sch_cake.c | 23 ++++++++++++++++++++---
+ 1 file changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/net/sched/sch_cake.c b/net/sched/sch_cake.c
+index 1fdc185f54fe..57212f34b168 100644
+--- a/net/sched/sch_cake.c
++++ b/net/sched/sch_cake.c
+@@ -191,6 +191,11 @@ struct cake_tin_data {
+ 	u64 peak_delay;
+ 	u64 base_delay;
+ 
++	/* Dither state for the quantum roundoff correction, see
++	 * cake_get_flow_quantum().
++	 */
++	u16	quantum_dither;
++
+ 	/* hash function stats */
+ 	u32	way_directs;
+ 	u32	way_hits;
+@@ -701,11 +706,23 @@ static u16 cake_get_flow_quantum(struct cake_tin_data *q,
+ 		host_load = max(host_load,
+ 				q->hosts[flow->dsthost].dsthost_bulk_flow_count);
+ 
+-	/* The get_random_u16() is a way to apply dithering to avoid
+-	 * accumulating roundoff errors
++	/* Dither the quantum so the roundoff of the division above does not
++	 * accumulate in one direction. This runs once per deficit refill,
++	 * i.e. host_load times per dequeued packet, so with many flows behind
++	 * one host -- which is what a browser speaking QUIC produces -- it is
++	 * one of the hottest lines in the qdisc.
++	 *
++	 * An additive Weyl sequence gives the uniform distribution the
++	 * correction needs, with lower discrepancy than random draws, for one
++	 * add. Randomness bought nothing here: the value perturbs the quantum
++	 * by at most one byte and is not a fairness guarantee, so there is
++	 * nothing for an adversary to predict that they could not already
++	 * derive from the deterministic DRR rotation.
+ 	 */
++	q->quantum_dither += 0x9e37U;
++
+ 	return (q->flow_quantum * quantum_div[host_load] +
+-		get_random_u16()) >> 16;
++		q->quantum_dither) >> 16;
+ }
+ 
+ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,

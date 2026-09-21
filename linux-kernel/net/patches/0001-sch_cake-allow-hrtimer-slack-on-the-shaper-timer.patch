@@ -1,0 +1,145 @@
+From 55d8f8672ace67a34c1b8422ce9a6c244f2d4189 Mon Sep 17 00:00:00 2001
+From: kbench <kbench@localhost>
+Date: Mon, 21 Sep 2026 09:51:16 +0200
+Subject: [PATCH 1/7] sch_cake: allow hrtimer slack on the shaper timer
+
+CAKE arms its watchdog after almost every shaped packet, always with an
+exact expiry. The hrtimer layer can then coalesce nothing: each packet
+costs a timer arm, an interrupt and a softirq round trip, and the qdisc
+dequeues one packet per wakeup. At 2.5 Gbit/s that is on the order of
+200k timer arms per second on a small router.
+
+sch_fq has carried the same knob since it was added there, defaulting to
+10us, and for the same reason. Add TCA_CAKE_TIMER_SLACK and pass it to
+qdisc_watchdog_schedule_range_ns() so neighbouring expiries can merge and
+try_bulk_dequeue_skb() drains several packets per wakeup.
+
+Default is 0, which is the exact-expiry behaviour CAKE has today, so an
+existing configuration is bit-identical unless the knob is set. Old
+userspace does not send the attribute and ignores it on dump.
+
+The slack is a bound on added delay, not a shift: a packet may be sent up
+to slack ns late, never early, so the shaped rate is unchanged.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XVxrZjHzxnmyA7MDozho8A
+---
+ include/uapi/linux/pkt_sched.h |  1 +
+ net/sched/sch_cake.c           | 36 +++++++++++++++++++++++++++++-----
+ 2 files changed, 32 insertions(+), 5 deletions(-)
+
+diff --git a/include/uapi/linux/pkt_sched.h b/include/uapi/linux/pkt_sched.h
+index 490efd288526..a450c55e93ca 100644
+--- a/include/uapi/linux/pkt_sched.h
++++ b/include/uapi/linux/pkt_sched.h
+@@ -1024,6 +1024,7 @@ enum {
+ 	TCA_CAKE_ACK_FILTER,
+ 	TCA_CAKE_SPLIT_GSO,
+ 	TCA_CAKE_FWMARK,
++	TCA_CAKE_TIMER_SLACK,
+ 	__TCA_CAKE_MAX
+ };
+ #define TCA_CAKE_MAX	(__TCA_CAKE_MAX - 1)
+diff --git a/net/sched/sch_cake.c b/net/sched/sch_cake.c
+index dc93267029e7..1fdc185f54fe 100644
+--- a/net/sched/sch_cake.c
++++ b/net/sched/sch_cake.c
+@@ -200,6 +200,8 @@ struct cake_tin_data {
+ 
+ struct cake_sched_config {
+ 	u64		rate_bps;
++	/* hrtimer slack, ns. 0 keeps the historical exact-expiry behaviour. */
++	u32		timer_slack;
+ 	u64		interval;
+ 	u64		target;
+ 	u64		sync_time;
+@@ -1752,6 +1754,23 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
+ 
+ static void cake_reconfigure(struct Qdisc *sch);
+ 
++/* Arm the shaper's timer with the configured slack.
++ *
++ * CAKE arms a timer after almost every shaped packet, and with zero slack the
++ * hrtimer layer cannot coalesce two of them: each costs an arm, an interrupt
++ * and a softirq round trip, and the qdisc then dequeues a single packet.
++ * Slack lets neighbouring expiries merge so try_bulk_dequeue_skb() drains
++ * several packets per wakeup instead. sch_fq has had this since commit
++ * 39d010504e6b ("net_sched: sch_fq: add dctcp-like marking"), defaulting to
++ * 10us; CAKE defaults to 0 so that behaviour is unchanged unless asked for.
++ */
++static void cake_schedule_next(struct cake_sched_data *qd, u64 next)
++{
++	u32 slack = READ_ONCE(qd->config->timer_slack);
++
++	qdisc_watchdog_schedule_range_ns(&qd->watchdog, next, next + slack);
++}
++
+ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
+ 			struct sk_buff **to_free)
+ {
+@@ -1792,7 +1811,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
+ 					    ktime_to_ns(
+ 						   q->failsafe_next_packet));
+ 				sch->qstats.overlimits++;
+-				qdisc_watchdog_schedule_ns(&q->watchdog, next);
++				cake_schedule_next(q, next);
+ 			}
+ 		}
+ 	}
+@@ -2060,7 +2079,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
+ 			       ktime_to_ns(q->failsafe_next_packet));
+ 
+ 		sch->qstats.overlimits++;
+-		qdisc_watchdog_schedule_ns(&q->watchdog, next);
++		cake_schedule_next(q, next);
+ 		return NULL;
+ 	}
+ 
+@@ -2270,7 +2289,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
+ 		u64 next = min(ktime_to_ns(q->time_next_packet),
+ 			       ktime_to_ns(q->failsafe_next_packet));
+ 
+-		qdisc_watchdog_schedule_ns(&q->watchdog, next);
++		cake_schedule_next(q, next);
+ 	} else if (!sch->q.qlen) {
+ 		int i;
+ 
+@@ -2280,8 +2299,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
+ 					ktime_add_ns(now,
+ 						     q->tins[i].cparams.target);
+ 
+-				qdisc_watchdog_schedule_ns(&q->watchdog,
+-							   ktime_to_ns(next));
++				cake_schedule_next(q, ktime_to_ns(next));
+ 				break;
+ 			}
+ 		}
+@@ -2323,6 +2341,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
+ 	[TCA_CAKE_ACK_FILTER]	 = { .type = NLA_U32 },
+ 	[TCA_CAKE_SPLIT_GSO]	 = { .type = NLA_U32 },
+ 	[TCA_CAKE_FWMARK]	 = { .type = NLA_U32 },
++	[TCA_CAKE_TIMER_SLACK]	 = { .type = NLA_U32 },
+ };
+ 
+ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
+@@ -2759,6 +2778,10 @@ static int cake_config_change(struct cake_sched_config *q, struct nlattr *opt,
+ 			rate_flags &= ~CAKE_FLAG_SPLIT_GSO;
+ 	}
+ 
++	if (tb[TCA_CAKE_TIMER_SLACK])
++		WRITE_ONCE(q->timer_slack,
++			   nla_get_u32(tb[TCA_CAKE_TIMER_SLACK]));
++
+ 	if (tb[TCA_CAKE_FWMARK]) {
+ 		WRITE_ONCE(q->fwmark_mask, nla_get_u32(tb[TCA_CAKE_FWMARK]));
+ 		WRITE_ONCE(q->fwmark_shft,
+@@ -2974,6 +2997,9 @@ static int cake_config_dump(struct cake_sched_config *q, struct sk_buff *skb)
+ 			!!(rate_flags & CAKE_FLAG_SPLIT_GSO)))
+ 		goto nla_put_failure;
+ 
++	if (nla_put_u32(skb, TCA_CAKE_TIMER_SLACK, READ_ONCE(q->timer_slack)))
++		goto nla_put_failure;
++
+ 	if (nla_put_u32(skb, TCA_CAKE_FWMARK, READ_ONCE(q->fwmark_mask)))
+ 		goto nla_put_failure;
+ 

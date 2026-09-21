@@ -1,0 +1,73 @@
+From 9541e1e287d8f189cea1ab433263203eae90a056 Mon Sep 17 00:00:00 2001
+From: kbench <kbench@localhost>
+Date: Mon, 21 Sep 2026 09:58:44 +0200
+Subject: [PATCH 4/7] netfilter: conntrack: pack the IPv4 tuple before hashing
+ it
+
+hash_conntrack_raw() siphashes the whole tuple up to
+dst.__nfct_hash_offsetend, 39 bytes. siphash consumes eight bytes per
+pair of rounds, so that is 14 SIPROUNDs. Of those 39 bytes, 24 are two
+IPv6-sized address unions from which IPv4 uses four bytes each.
+
+The hash runs several times over the life of a flow -- on the lookup
+miss, on the NAT unique-tuple search, on insert, on confirm, on each
+direction, and again per packet on an established connection. A DNS
+query or a QUIC handshake is a flow of two packets, so this setup cost
+is most of what such a flow costs at all.
+
+The fifteen significant IPv4 bytes fit in two words. Hash those with
+siphash_2u64(): 8 SIPROUNDs instead of 14.
+
+The hash function does not change. It is still siphash under the same
+per-boot random key, so the resistance to hash flooding it was chosen
+for is intact -- only the number of message bytes differs. The value is
+internal: it is scaled to a bucket index, and every candidate in the
+bucket is still compared with nf_ct_tuple_equal(), so a collision costs
+a comparison and cannot produce a wrong match.
+
+IPv6 keeps the generic path.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XVxrZjHzxnmyA7MDozho8A
+---
+ net/netfilter/nf_conntrack_core.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/net/netfilter/nf_conntrack_core.c b/net/netfilter/nf_conntrack_core.c
+index d0d9e5ea84a0..05afb3e81076 100644
+--- a/net/netfilter/nf_conntrack_core.c
++++ b/net/netfilter/nf_conntrack_core.c
+@@ -220,6 +220,33 @@ static u32 hash_conntrack_raw(const struct nf_conntrack_tuple *tuple,
+ 	key.key[0] ^= zoneid;
+ 	key.key[1] ^= net_hash_mix(net);
+ 
++	/* The generic path hashes 39 bytes: two IPv6-sized unions of which
++	 * IPv4 uses four bytes each, the two ports, l3num and protonum.
++	 * siphash consumes eight bytes per pair of rounds, so that is 14
++	 * SIPROUNDs, and this runs several times over the life of a flow --
++	 * lookup, insert, confirm, and again per packet on an established
++	 * one. Short DNS and QUIC exchanges make that the dominant cost.
++	 *
++	 * For IPv4 the fifteen significant bytes fit in two words: hash those
++	 * instead, in 8 SIPROUNDs. l3num is constant on this branch but is
++	 * kept in the packed word so the encoding stays unambiguous if
++	 * another family is ever routed through it.
++	 *
++	 * The hash function is unchanged -- still siphash under the same
++	 * random key -- so the resistance to hash flooding this was chosen
++	 * for is unchanged. Only the number of message bytes differs, and the
++	 * value is internal: it is scaled into a bucket index and every
++	 * candidate is still compared with nf_ct_tuple_equal().
++	 */
++	if (tuple->src.l3num == AF_INET)
++		return siphash_2u64((u64)tuple->src.u3.ip << 32 |
++					    tuple->dst.u3.ip,
++				    (u64)tuple->src.u.all << 48 |
++					    (u64)tuple->dst.u.all << 32 |
++					    (u64)tuple->src.l3num << 8 |
++					    tuple->dst.protonum,
++				    &key);
++
+ 	return siphash((void *)tuple,
+ 			offsetofend(struct nf_conntrack_tuple, dst.__nfct_hash_offsetend),
+ 			&key);

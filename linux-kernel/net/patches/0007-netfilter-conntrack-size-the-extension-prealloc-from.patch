@@ -1,0 +1,69 @@
+From 07d2e4208909513c122254eed3813646cffb36a9 Mon Sep 17 00:00:00 2001
+From: kbench <kbench@localhost>
+Date: Mon, 21 Sep 2026 10:04:08 +0200
+Subject: [PATCH 7/7] netfilter: conntrack: size the extension prealloc from
+ the types in use
+
+nf_ct_ext_add() reserves a flat 128 bytes on the first extension so that
+adding a second one does not krealloc. The comment gives the reason:
+conntrack events are on by default, and the event cache is large.
+
+On a plain NAT router that reservation is mostly waste. The only
+extension such a flow gets is nf_conn_nat, which is four bytes, so every
+new flow does a kmalloc-128 and the matching kfree to hold one int. With
+DNS and QUIC producing a steady stream of two-packet flows, that alloc
+and free pair is a per-flow cost that buys nothing.
+
+Derive the constant from the extension types that are actually compiled
+in -- NAT, plus the event cache when CONFIG_NF_CONNTRACK_EVENTS is set --
+instead of hardcoding 128. A kernel with events compiled in reserves what
+it reserved before; one without lands in a smaller slab bucket.
+
+A static_assert keeps the value at or below the old 128, so no
+configuration can end up in a larger bucket than it used to be in.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XVxrZjHzxnmyA7MDozho8A
+---
+ net/netfilter/nf_conntrack_extend.c | 28 +++++++++++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/net/netfilter/nf_conntrack_extend.c b/net/netfilter/nf_conntrack_extend.c
+index 0da105e1ded9..54f0291525d2 100644
+--- a/net/netfilter/nf_conntrack_extend.c
++++ b/net/netfilter/nf_conntrack_extend.c
+@@ -25,7 +25,33 @@
+ #include <net/netfilter/nf_conntrack_act_ct.h>
+ #include <net/netfilter/nf_nat.h>
+ 
+-#define NF_CT_EXT_PREALLOC	128u /* conntrack events are on by default */
++/* Reserve on the first extension so that adding a second one does not
++ * krealloc. The number to reserve is the set that is normally added
++ * together: NAT, and the event cache when it is compiled in.
++ *
++ * Sizing it from the types that actually exist, rather than a fixed 128,
++ * matters on a plain NAT router. There the only extension a flow ever gets
++ * is nf_conn_nat, which is four bytes, and every new flow -- a DNS query, a
++ * QUIC handshake -- was doing a kmalloc-128 and the matching free to hold
++ * it. A kernel with events compiled in reserves what it did before.
++ */
++#define NF_CT_EXT_PREALLOC_NAT						\
++	(IS_ENABLED(CONFIG_NF_NAT) ? sizeof(struct nf_conn_nat) : 0)
++#ifdef CONFIG_NF_CONNTRACK_EVENTS
++#define NF_CT_EXT_PREALLOC_ECACHE	sizeof(struct nf_conntrack_ecache)
++#else
++#define NF_CT_EXT_PREALLOC_ECACHE	0
++#endif
++
++#define NF_CT_EXT_PREALLOC						\
++	((u32)ALIGN(sizeof(struct nf_ct_ext) + NF_CT_EXT_PREALLOC_NAT +	\
++		    NF_CT_EXT_PREALLOC_ECACHE,				\
++		    __alignof__(struct nf_ct_ext)))
++
++/* Never reserve more than the 128 bytes this used to, so no configuration
++ * ends up in a larger slab bucket than before.
++ */
++static_assert(NF_CT_EXT_PREALLOC <= 128u);
+ 
+ static const u8 nf_ct_ext_type_len[NF_CT_EXT_NUM] = {
+ 	[NF_CT_EXT_HELPER] = sizeof(struct nf_conn_help),
