@@ -1,0 +1,212 @@
+From 27630bcb93a808f093b268ee2c940fa0fb50937f Mon Sep 17 00:00:00 2001
+From: kbench <kbench@localhost>
+Date: Mon, 21 Sep 2026 11:32:54 +0200
+Subject: [PATCH 1/3] udp: announce a queued batch in one wakeup
+
+__udp_enqueue_schedule_skb() queues up to a NAPI batch of datagrams under
+one lock and one rmem accounting update, then calls sk_data_ready() once
+per skb:
+
+	while (nb) {
+		INDIRECT_CALL_1(READ_ONCE(sk->sk_data_ready),
+				sock_def_readable, sk);
+		nb--;
+	}
+
+The loop is there because the wakeup wakes a single exclusive waiter, so
+nb threads each blocked in their own recvmsg() need nb calls.
+
+A consumer on epoll is not that. It registers a non-exclusive waiter, so
+every one of those nb calls runs sock_def_readable() in full -- the
+smp_mb() inside skwq_has_sleeper(), the waitqueue lock, and
+ep_poll_callback(), which observes the same receive queue each time and
+has nothing new to report after the first.
+
+That consumer is what a QUIC client is. The transport is in userspace, so
+a browser or a runtime speaking HTTP/3 does exactly this: connected UDP
+sockets drained from an event loop. TCP does not pay it, because
+tcp_data_ready() is gated on tcp_epollin_ready().
+
+Add sock_data_ready_nr(), which states the count once, and
+__wake_up_sync_key_nr() under it so the waitqueue can be told how many
+exclusive waiters to wake. Exclusive waiters see no change: nb of them
+are still woken. The non-exclusive callback runs once instead of nb
+times.
+
+sk_data_ready is an overridable pointer, and a socket whose callback has
+been replaced -- sockmap, TLS, BPF -- may count something other than
+waiters. Those keep the loop; only the default callback takes the new
+path.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XVxrZjHzxnmyA7MDozho8A
+---
+ include/linux/wait.h |  4 ++++
+ include/net/sock.h   |  1 +
+ kernel/sched/wait.c  | 24 ++++++++++++++++++++++++
+ net/core/sock.c      | 44 +++++++++++++++++++++++++++++++++++++++++---
+ net/ipv4/udp.c       | 15 ++++++++-------
+ 5 files changed, 78 insertions(+), 10 deletions(-)
+
+diff --git a/include/linux/wait.h b/include/linux/wait.h
+index 7e215330199c..50345614e987 100644
+--- a/include/linux/wait.h
++++ b/include/linux/wait.h
+@@ -213,6 +213,8 @@ int __wake_up(struct wait_queue_head *wq_head, unsigned int mode, int nr, void *
+ void __wake_up_on_current_cpu(struct wait_queue_head *wq_head, unsigned int mode, void *key);
+ void __wake_up_locked_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
+ void __wake_up_sync_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
++void __wake_up_sync_key_nr(struct wait_queue_head *wq_head, unsigned int mode,
++			   int nr_exclusive, void *key);
+ void __wake_up_locked_sync_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
+ void __wake_up_locked(struct wait_queue_head *wq_head, unsigned int mode, int nr);
+ void __wake_up_sync(struct wait_queue_head *wq_head, unsigned int mode);
+@@ -245,6 +247,8 @@ void __wake_up_pollfree(struct wait_queue_head *wq_head);
+ 	__wake_up(x, TASK_INTERRUPTIBLE, 1, poll_to_key(m))
+ #define wake_up_interruptible_sync_poll(x, m)					\
+ 	__wake_up_sync_key((x), TASK_INTERRUPTIBLE, poll_to_key(m))
++#define wake_up_interruptible_sync_poll_nr(x, nr, m)				\
++	__wake_up_sync_key_nr((x), TASK_INTERRUPTIBLE, (nr), poll_to_key(m))
+ #define wake_up_interruptible_sync_poll_locked(x, m)				\
+ 	__wake_up_locked_sync_key((x), TASK_INTERRUPTIBLE, poll_to_key(m))
+ 
+diff --git a/include/net/sock.h b/include/net/sock.h
+index 60ea55dc1885..6b30ade7f0d4 100644
+--- a/include/net/sock.h
++++ b/include/net/sock.h
+@@ -3143,6 +3143,7 @@ static inline bool sk_dev_equal_l3scope(struct sock *sk, int dif)
+ }
+ 
+ void sock_def_readable(struct sock *sk);
++void sock_data_ready_nr(struct sock *sk, int nr);
+ 
+ int sock_bindtoindex(struct sock *sk, int ifindex, bool lock_sk);
+ void sock_set_timestamp(struct sock *sk, int optname, bool valbool);
+diff --git a/kernel/sched/wait.c b/kernel/sched/wait.c
+index d033f600f48c..805a24368593 100644
+--- a/kernel/sched/wait.c
++++ b/kernel/sched/wait.c
+@@ -194,6 +194,30 @@ void __wake_up_sync_key(struct wait_queue_head *wq_head, unsigned int mode,
+ }
+ EXPORT_SYMBOL_GPL(__wake_up_sync_key);
+ 
++/**
++ * __wake_up_sync_key_nr - wake up @nr_exclusive threads, sync variant
++ * @wq_head: the waitqueue
++ * @mode: which threads
++ * @nr_exclusive: how many exclusive waiters to wake
++ * @key: opaque value to be passed to wakeup targets
++ *
++ * __wake_up_sync_key() wakes exactly one exclusive waiter, so a caller with
++ * a batch of n independent events has to call it n times. Non-exclusive
++ * waiters -- an epoll callback, say -- then run n times to observe one
++ * change, once per call, at a spinlock and a full barrier each.
++ *
++ * This lets such a caller state the count once.
++ */
++void __wake_up_sync_key_nr(struct wait_queue_head *wq_head, unsigned int mode,
++			   int nr_exclusive, void *key)
++{
++	if (unlikely(!wq_head))
++		return;
++
++	__wake_up_common_lock(wq_head, mode, nr_exclusive, WF_SYNC, key);
++}
++EXPORT_SYMBOL_GPL(__wake_up_sync_key_nr);
++
+ /**
+  * __wake_up_locked_sync_key - wake up a thread blocked on a locked waitqueue.
+  * @wq_head: the waitqueue
+diff --git a/net/core/sock.c b/net/core/sock.c
+index d23333bb4f3f..608f73952a6c 100644
+--- a/net/core/sock.c
++++ b/net/core/sock.c
+@@ -3656,7 +3656,7 @@ static void sock_def_error_report(struct sock *sk)
+ 	rcu_read_unlock();
+ }
+ 
+-void sock_def_readable(struct sock *sk)
++static void __sock_def_readable(struct sock *sk, int nr)
+ {
+ 	struct socket_wq *wq;
+ 
+@@ -3665,12 +3665,50 @@ void sock_def_readable(struct sock *sk)
+ 	rcu_read_lock();
+ 	wq = rcu_dereference(sk->sk_wq);
+ 	if (skwq_has_sleeper(wq))
+-		wake_up_interruptible_sync_poll(&wq->wait, EPOLLIN | EPOLLPRI |
+-						EPOLLRDNORM | EPOLLRDBAND);
++		wake_up_interruptible_sync_poll_nr(&wq->wait, nr,
++						   EPOLLIN | EPOLLPRI |
++						   EPOLLRDNORM | EPOLLRDBAND);
+ 	sk_wake_async_rcu(sk, SOCK_WAKE_WAITD, POLL_IN);
+ 	rcu_read_unlock();
+ }
+ 
++void sock_def_readable(struct sock *sk)
++{
++	__sock_def_readable(sk, 1);
++}
++
++/**
++ * sock_data_ready_nr - announce @nr queued items in one call
++ * @sk: the socket
++ * @nr: how many independent items were queued
++ *
++ * A caller that queued a batch would otherwise call sk_data_ready() once per
++ * item, because the wakeup wakes a single exclusive waiter. Each of those
++ * calls costs a full barrier in skwq_has_sleeper(), the waitqueue lock, and
++ * one run of every non-exclusive waiter -- an epoll callback among them --
++ * which observes the same queue however many times it is invoked.
++ *
++ * This states the count once. @nr exclusive waiters are still woken, so a
++ * set of threads each blocked in their own recvmsg() see no difference.
++ *
++ * Only usable when sk_data_ready is the default. A socket whose callback has
++ * been replaced (sockmap, TLS, BPF) may count something other than waiters,
++ * so those keep the loop.
++ */
++void sock_data_ready_nr(struct sock *sk, int nr)
++{
++	void (*ready)(struct sock *sk) = READ_ONCE(sk->sk_data_ready);
++
++	if (likely(ready == sock_def_readable)) {
++		__sock_def_readable(sk, nr);
++		return;
++	}
++
++	while (nr--)
++		INDIRECT_CALL_1(ready, sock_def_readable, sk);
++}
++EXPORT_SYMBOL_GPL(sock_data_ready_nr);
++
+ static void sock_def_write_space(struct sock *sk)
+ {
+ 	struct socket_wq *wq;
+diff --git a/net/ipv4/udp.c b/net/ipv4/udp.c
+index bb8cfc62cb00..5f2bf51cadd0 100644
+--- a/net/ipv4/udp.c
++++ b/net/ipv4/udp.c
+@@ -1751,14 +1751,15 @@ int __udp_enqueue_schedule_skb(struct sock *sk, struct sk_buff *skb)
+ 	spin_unlock(&list->lock);
+ 
+ 	if (!sock_flag(sk, SOCK_DEAD)) {
+-		/* Multiple threads might be blocked in recvmsg(),
+-		 * using prepare_to_wait_exclusive().
++		/* Multiple threads might be blocked in recvmsg(), using
++		 * prepare_to_wait_exclusive(), so nb of them have to be woken.
++		 * State the count once rather than calling nb times: an epoll
++		 * consumer -- which is what a QUIC client is -- registers a
++		 * non-exclusive waiter that runs on every call and observes
++		 * the same queue each time, at a full barrier and the
++		 * waitqueue lock apiece.
+ 		 */
+-		while (nb) {
+-			INDIRECT_CALL_1(READ_ONCE(sk->sk_data_ready),
+-					sock_def_readable, sk);
+-			nb--;
+-		}
++		sock_data_ready_nr(sk, nb);
+ 	}
+ 
+ 	if (unlikely(to_drop)) {

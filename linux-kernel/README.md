@@ -18,7 +18,8 @@ All of it is written against **Linux 7.2, vanilla**.
 |---|---|
 | [`vfs/`](vfs/README.md) | The open and stat paths: 15 patches, analysis, Lean proofs |
 | [`sched/`](sched/README.md) | Scheduler cacheline placement: 2 patches, verified on x86_64 and i386 |
-| [`net/`](net/README.md) | The router forwarding path: 7 patches, generic `net/` code only |
+| [`net/`](net/README.md) | The router forwarding path: 8 patches, generic `net/` code only |
+| [`client/`](client/README.md) | The outbound path: 3 patches, what a browser or curl does |
 
 The numbered documents below predate that split and stand on their own.
 
