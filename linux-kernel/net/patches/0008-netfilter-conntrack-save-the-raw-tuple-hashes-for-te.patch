@@ -1,4 +1,4 @@
-From 113b9a27622122d4c6083747f90c4b35c00cf9c1 Mon Sep 17 00:00:00 2001
+From 44cf5cb3a17686a88b1f230c482b7a86eaf9d572 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 10:26:46 +0200
 Subject: [PATCH 8/8] netfilter: conntrack: save the raw tuple hashes for
@@ -77,10 +77,10 @@ index bc42dd0e10e6..bdce5bb0ecb0 100644
  	struct nf_conntrack_zone zone;
  #endif
 diff --git a/net/netfilter/nf_conntrack_core.c b/net/netfilter/nf_conntrack_core.c
-index 05afb3e81076..9d450d8628d4 100644
+index 673f5cd6659e..9c855fa797bf 100644
 --- a/net/netfilter/nf_conntrack_core.c
 +++ b/net/netfilter/nf_conntrack_core.c
-@@ -646,18 +646,20 @@ EXPORT_SYMBOL(nf_ct_destroy);
+@@ -647,18 +647,20 @@ EXPORT_SYMBOL(nf_ct_destroy);
  
  static void __nf_ct_delete_from_lists(struct nf_conn *ct)
  {
@@ -108,7 +108,7 @@ index 05afb3e81076..9d450d8628d4 100644
  	} while (nf_conntrack_double_lock(hash, reply_hash, sequence));
  
  	clean_from_lists(ct);
-@@ -1229,14 +1231,24 @@ __nf_conntrack_confirm(struct sk_buff *skb)
+@@ -1230,14 +1232,24 @@ __nf_conntrack_confirm(struct sk_buff *skb)
  	zone = nf_ct_zone(ct);
  	local_bh_disable();
  

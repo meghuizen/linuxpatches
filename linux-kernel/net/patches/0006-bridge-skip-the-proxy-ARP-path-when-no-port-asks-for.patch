@@ -1,4 +1,4 @@
-From a2cfb3260ce97a836e4f989f567e1ede0aadc11b Mon Sep 17 00:00:00 2001
+From 4bea378d5789c7d48f50e40c2c557b8541107c48 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 10:02:48 +0200
 Subject: [PATCH 6/8] bridge: skip the proxy ARP path when no port asks for it

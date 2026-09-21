@@ -89,12 +89,38 @@ default reproduces today's behaviour exactly. Everything else is internal.
 All eight compile on x86_64. Struct offsets quoted in the commit messages
 were taken from a built object, not from reading the header.
 
+## Cross-ISA instruction counts
+
+`hashbench.c` carries the kernel's siphash and jhash primitives copied
+verbatim, so the generated code can be compared across targets without
+building a kernel for each. Straight-line instruction counts, padding and
+`endbr64` excluded, GCC 15.2 at `-O2`:
+
+| hash call | x86_64 | i386 | A53 | rv64gc | rv64gc_zbb |
+|---|---|---|---|---|---|
+| conntrack 39 B, 12 SIPROUNDs | 200 | 636 | 157 | 359 | 217 |
+| conntrack 16 B, 8 SIPROUNDs (patch 4) | 133 | 416 | 108 | 245 | 151 |
+| flowtable 88 B, 7 mixes (today) | 274 | 280 | 184 | 334 | 236 |
+| flowtable 42 B, 3 mixes (patch 3) | 134 | 139 | 94 | 166 | 116 |
+
+Two things fall out of the table.
+
+**i386 pays four times what x86_64 pays for siphash, and jhash barely
+differs.** siphash is 64-bit add/xor/`rol64`; a 64-bit rotate on a 32-bit
+ISA is several instructions, and there are six per round. jhash is 32-bit
+throughout, so it costs the same either way. This is exactly why
+`lib/siphash.c` compiles a true 32-bit HalfSipHash on 32-bit targets.
+
+**RISC-V without Zbb has no rotate instruction at all.** Every `rol64`
+becomes shift, shift, or. `rv64gc` is 359 instructions against the A53's
+157 for the same hash; `rv64gc_zbb` brings it to 217. Anyone building this
+kernel for a RISC-V router wants `CONFIG_RISCV_ISA_ZBB`.
+
 ## What was measured, and what was not
 
-**Not measured.** These came out of a static analysis of the code against
-the traffic model above. The instruction counts in the commit messages are
-derived from what the code does — jhash consumes 12 bytes per round,
-siphash 8 bytes per pair of rounds — not from a profile.
+The instruction counts above are real, taken from disassembly. What is
+**not** measured is how they translate into time on the target: no
+profile, no packet rate, no cycle counts.
 
 The gate that would settle them is `perf stat` on the real device under
 real traffic. On the machine this was written on, the guest cannot resolve
