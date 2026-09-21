@@ -73,6 +73,22 @@ teardown() {
 	nft delete table ip nbench 2>/dev/null
 	nft delete table netdev nbench 2>/dev/null
 	ip link del nbbr0 2>/dev/null
+	# Delete the root-side veth ends explicitly and then WAIT for them.
+	# "ip netns del" returns before the namespace is dismantled, so the
+	# peer interfaces in the root namespace can outlive it by a moment.
+	# The next setup_topology then raced this cleanup and died with
+	# "RTNETLINK answers: File exists", which the caller reported as
+	# "topology unavailable" -- that silently skipped the GRO section and
+	# client patch 1 on the first full run of this script.
+	ip link del vl-r 2>/dev/null
+	ip link del vr-r 2>/dev/null
+	local i=0
+	while ip link show vl-r >/dev/null 2>&1 ||
+	      ip link show vr-r >/dev/null 2>&1; do
+		sleep 0.2
+		i=$((i + 1))
+		[ "$i" -gt 25 ] && break
+	done
 }
 trap teardown EXIT
 
@@ -101,6 +117,42 @@ setup_topology() {
 	ip link set vr-r up
 	sysctl -qw net.ipv4.ip_forward=1
 	return 0
+}
+
+
+# The two nftables rulesets, as functions so their exit status can gate the
+# section that needs them.
+#
+# The chain is called nbfwd, not fwd: "fwd" is a reserved word in nftables
+# (the netdev fwd statement) and a chain named that fails to parse. It did,
+# silently, on the first run of this script -- the ruleset never loaded, so no
+# netfilter hook was installed, so conntrack never engaged, and every row of
+# the conntrack and flowtable sections printed a plausible rate next to ct=0
+# while measuring nothing about patches 3, 4, 7 or 8. A section whose hook did
+# not install must skip, not report.
+ruleset_ct() {
+	nft -f - <<'NFT'
+table ip nbench {
+	chain nbfwd {
+		type filter hook forward priority filter; policy accept;
+		ct state new counter
+	}
+}
+NFT
+}
+
+ruleset_flowtable() {
+	nft -f - <<'NFT'
+table ip nbench {
+	flowtable ft {
+		hook ingress priority filter; devices = { vl-r, vr-r };
+	}
+	chain nbfwd {
+		type filter hook forward priority filter; policy accept;
+		ct state established flow add @ft
+	}
+}
+NFT
 }
 
 ########################## traffic generator ##########################
@@ -138,11 +190,35 @@ static double now(void)
 int main(int argc, char **argv)
 {
 	const char *mode = argv[1];
-	int np = atoi(argv[2]);
-	long it = atol(argv[3]);
-	const char *dst = argc > 4 ? argv[4] : "10.99.2.2";
+	/* Reject an unknown mode rather than falling into one. "churn" is the
+	 * unlabelled else-branch below, so before this check a typo'd or
+	 * renamed mode ran churn and printed a perfectly plausible rate under
+	 * the wrong section heading. Two results in this project have already
+	 * been thrown away for measuring something other than what their
+	 * heading claimed; this is a two-line guard against a third. */
+	static const char *modes[] = { "churn", "stream", "sink", "ctl",
+				       "epollsink", "burst", NULL };
+	int m;
+	int np;
+	long it;
+	const char *dst;
 	char buf[128];
 	double t0, t1;
+
+	if (argc < 4) {
+		fprintf(stderr, "usage: nb <mode> <procs> <iters> [dst]\n");
+		return 2;
+	}
+	for (m = 0; modes[m]; m++)
+		if (!strcmp(mode, modes[m]))
+			break;
+	if (!modes[m]) {
+		fprintf(stderr, "nb: unknown mode '%s'\n", mode);
+		return 2;
+	}
+	np = atoi(argv[2]);
+	it = atol(argv[3]);
+	dst = argc > 4 ? argv[4] : "10.99.2.2";
 
 	memset(buf, 0x5a, sizeof buf);
 
@@ -264,14 +340,62 @@ gcc -O2 -o /tmp/nb /tmp/nb.c || { echo "generator build failed"; exit 1; }
 ctcount() { conntrack -C 2>/dev/null || cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo "?"; }
 
 # One measurement plus the control that goes with it.
-measure() { # measure <label> <mode> <procs>
-	local label="$1" mode="$2" np="$3"
-	local ctl out ops norm
-	ctl=$(ip netns exec $NS_L /tmp/nb ctl "$np" $((ITERS * 4)) | awk '{print $1}')
-	out=$(ip netns exec $NS_L /tmp/nb "$mode" "$np" "$ITERS")
+# The control, same scheme as tree-bench.sh and for the same reason: ONE
+# control sample is as noisy as the measurement it normalises, so dividing by
+# it compounds variance instead of removing it. The 2026-09-21 tree-bench pair
+# demonstrated it -- the control moved 3x within a single boot and every norm=
+# in every rate-based section became noise, while the perf-counter sections
+# stayed reproducible to 0.05%. Median of CTL_REPS samples, taken before AND
+# after the measurement so it brackets it in time, and the row says for itself
+# when the two brackets disagree.
+CTL_REPS=${CTL_REPS:-3}
+CTL_NOISE_PCT=${CTL_NOISE_PCT:-15}
+CTL_UNSTABLE=0
+CTL_TOTAL=0
+
+ctl_median() { # ctl_median <procs>
+	local np="$1" n=$(( ITERS * 4 / CTL_REPS )) i
+	for i in $(seq "$CTL_REPS"); do
+		ip netns exec $NS_L /tmp/nb ctl "$np" "$n" | awk '{print $1}'
+	done | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}'
+}
+
+# Run between the workload and the trailing control bracket, and again before
+# the leading one. Default is a no-op; the conntrack sections override it.
+#
+# Conntrack's garbage collector keeps working after the traffic stops. On the
+# first run of this script the trailing bracket landed in the middle of that
+# and reported spreads of 2135%, 807% and 116% -- every conntrack and
+# flowtable row marked unusable, not because the measurement was bad but
+# because its wake was still being cleaned up when the control ran. Quiesce
+# first, then bracket.
+settle() { :; }
+
+measure() { # measure <label> <mode> <procs> [iters]
+	local label="$1" mode="$2" np="$3" it="${4:-$ITERS}"
+	local pre post ctl spread out ops
+	settle
+	pre=$(ctl_median "$np")
+	out=$(ip netns exec $NS_L /tmp/nb "$mode" "$np" "$it")
+	# Read the table BEFORE settling. settle() flushes conntrack, so reading
+	# it afterwards reported ct=0 on every row of the first run that had a
+	# working ruleset -- the entries were created, flushed, then counted.
+	ctnow=$(ctcount)
+	settle
+	post=$(ctl_median "$np")
+	ctl=$(( (pre + post) / 2 ))
+	spread=$(awk -v a="$pre" -v b="$post" 'BEGIN{
+		if (a > b) { t = a; a = b; b = t }
+		if (a > 0) printf "%.0f", 100 * (b - a) / a; else print 999 }')
+	CTL_TOTAL=$(( CTL_TOTAL + 1 ))
+	[ "$spread" -gt "$CTL_NOISE_PCT" ] && CTL_UNSTABLE=$(( CTL_UNSTABLE + 1 ))
 	ops=$(echo "$out" | awk '{print $1}')
-	norm=$(awk -v a="$ops" -v b="$ctl" 'BEGIN{if(b>0)printf "%.5f",a/b; else printf "n/a"}')
-	printf '  %-22s %s  ctl=%s  norm=%s  ct=%s\n' "$label" "$out" "$ctl" "$norm" "$(ctcount)"
+	printf '  %-22s %s  %s  ct=%s\n' "$label" "$out" \
+		"$(awk -v a="$ops" -v b="$ctl" -v s="$spread" -v lim="$CTL_NOISE_PCT" 'BEGIN{
+			printf "ctl=%d  spread=%s%%  norm=", b, s
+			if (b > 0) printf "%.5f", a/b; else printf "n/a"
+			if (s + 0 > lim) printf "  !! control moved during the run: norm is noise"
+		 }')" "$ctnow"
 }
 
 ########################## conntrack flow churn ##########################
@@ -279,27 +403,73 @@ echo "### conntrack flow churn (patches 4, 7, 8)"
 echo "  every datagram is a new 5-tuple: one conntrack entry created per op."
 echo "  This is the cost DNS and QUIC actually pay -- a flow of one or two"
 echo "  packets pays the full setup and teardown and nothing amortises it."
-if need nft && setup_topology; then
-	nft -f - <<'NFT'
-table ip nbench {
-	chain fwd {
-		type filter hook forward priority filter; policy accept;
-		ct state new counter
-	}
-}
-NFT
+if need nft && setup_topology && ruleset_ct; then
 	ip netns exec $NS_R /tmp/nb sink 1 1 &
 	SINK=$!
 	sleep 0.3
-	/tmp/nb churn 1 $((ITERS / 8)) >/dev/null 2>&1   # warm-up, discarded
-	for r in 1 2 3 4; do
-		printf '  run %d:' "$r"
-		measure "churn" churn "$PROCS"
+	# In NS_L, like the measurement. The warm-up used to run in the root
+	# netns, which warms a different path than the one being timed.
+	ip netns exec $NS_L /tmp/nb churn 1 $((ITERS / 8)) >/dev/null 2>&1
+	# Stay UNDER the conntrack table rather than swamping it. The first run
+	# of this section offered 16 x 400000 = 6.4M distinct tuples to a
+	# 262144-entry table: it filled on run 1 and every run after that
+	# measured early_drop eviction on a full table, which is not the path
+	# patches 4 and 7 are on (tuple hash at insert, extension prealloc at
+	# alloc). 60% of the table leaves headroom for entries that have not
+	# timed out yet.
+	CTMAX=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 262144)
+	settle() { conntrack -F >/dev/null 2>&1; sleep 1; }
+
+	# /proc/net/stat/nf_conntrack is per-CPU; sum the columns that say
+	# whether the table was under pressure. Without these, saturation has
+	# to be inferred from the entry count, which only shows the ceiling was
+	# reached, not what it cost.
+	ctstat() { # ctstat <column-name>
+		awk -v want="$1" 'NR==1 { for (i = 1; i <= NF; i++) if ($i == want) c = i; next }
+			 c { t += strtonum("0x" $c) } END { print t + 0 }' \
+			/proc/net/stat/nf_conntrack 2>/dev/null || echo 0
+	}
+
+	# TWO regimes, reported separately, because they exercise different
+	# patches. Under the table every new flow is a clean insert: that is
+	# patch 4 (tuple hash) and patch 7 (extension prealloc). Over it, each
+	# new flow additionally forces early_drop() to evict one -- a DELETE on
+	# the packet path -- which is what patch 8 removes a rehash from. Sizing
+	# the saturated case away, as the first fix here did, would have
+	# measured patch 8 in the one condition where it does least.
+	#
+	# Saturation is not an exotic case for the target hardware: this guest
+	# has 7 GB and nf_conntrack_max is derived from RAM at init, so a 1 GB
+	# router gets a far smaller table and reaches it far sooner.
+	# Hold the WORKLOAD fixed and move the TABLE, rather than the reverse.
+	# Sizing the workload to 60% of a 262144-entry table gave 157280 flows,
+	# which this guest churns in 0.042s -- shorter than the fork of the 16
+	# processes doing it, so the row measured startup, not conntrack. The
+	# workload is now identical in both regimes and long enough to time;
+	# nf_conntrack_max decides whether the table saturates.
+	CHURN_IT=$((ITERS / 2))
+	TOTAL=$((PROCS * CHURN_IT))
+	for regime in under over; do
+		if [ "$regime" = under ]; then
+			sysctl -qw net.netfilter.nf_conntrack_max=$((TOTAL * 2)) 2>/dev/null
+			echo "  [under] $PROCS x $CHURN_IT = $TOTAL flows, table $((TOTAL * 2)): clean insert"
+		else
+			sysctl -qw net.netfilter.nf_conntrack_max=$((TOTAL / 10)) 2>/dev/null
+			echo "  [over]  $PROCS x $CHURN_IT = $TOTAL flows, table $((TOTAL / 10)): insert + early_drop evict"
+		fi
+		d0=$(ctstat drop); e0=$(ctstat early_drop); i0=$(ctstat insert_failed)
+		for r in 1 2; do
+			printf '  %-7s run %d:' "$regime" "$r"
+			measure "churn-$regime" churn "$PROCS" "$CHURN_IT"
+		done
+		echo "    table pressure: drop=$(( $(ctstat drop) - d0 ))  early_drop=$(( $(ctstat early_drop) - e0 ))  insert_failed=$(( $(ctstat insert_failed) - i0 ))"
 	done
+	sysctl -qw net.netfilter.nf_conntrack_max=$CTMAX 2>/dev/null
+	settle() { :; }
 	kill $SINK 2>/dev/null
 	echo "  conntrack table: $(ctcount) entries, max $(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null)"
 else
-	echo "  topology or nftables unavailable -- section skipped"
+	echo "  topology, nftables or the ruleset unavailable -- section skipped"
 fi
 echo
 
@@ -307,29 +477,22 @@ echo
 echo "### established forwarding through the flowtable (patch 3)"
 echo "  one 5-tuple for the whole run, so conntrack is touched once and every"
 echo "  packet after that is the per-packet path the flowtable hash sits on."
-if need nft && setup_topology; then
-	nft -f - <<'NFT'
-table ip nbench {
-	flowtable ft {
-		hook ingress priority filter; devices = { vl-r, vr-r };
-	}
-	chain fwd {
-		type filter hook forward priority filter; policy accept;
-		ct state established flow add @ft
-	}
-}
-NFT
+if need nft && setup_topology && ruleset_flowtable; then
 	ip netns exec $NS_R /tmp/nb sink 1 1 &
 	SINK=$!
 	sleep 0.3
-	/tmp/nb stream 1 $((ITERS / 8)) >/dev/null 2>&1
+	ip netns exec $NS_L /tmp/nb stream 1 $((ITERS / 8)) >/dev/null 2>&1
+	# One flush before the sweep: this section wants a table holding its own
+	# single flow, not whatever the churn section left behind.
+	conntrack -F >/dev/null 2>&1
+	sleep 1
 	for r in 1 2 3 4; do
 		printf '  run %d:' "$r"
 		measure "stream" stream "$PROCS"
 	done
 	kill $SINK 2>/dev/null
 else
-	echo "  topology or nftables unavailable -- section skipped"
+	echo "  topology, nftables or the ruleset unavailable -- section skipped"
 fi
 echo
 
@@ -338,16 +501,37 @@ echo "### cake shaped egress (patches 1, 2)"
 echo "  CAKE arms an hrtimer after nearly every shaped packet. The figure of"
 echo "  merit is softirq time per delivered packet, not throughput: the shaper"
 echo "  holds throughput at the configured rate by construction."
+# Offered load is deliberately close to the shaped rate, not far above it.
+# The first run of this section pushed 16 senders at a 200mbit shaper and got
+# 4.1M drops against 89k delivered packets -- a 98% drop rate, which means
+# sys+irq time was dominated by enqueue-and-drop. Both patches here are on the
+# DEQUEUE side (the hrtimer arm, the DRR deficit refill), so that arrangement
+# measured almost none of what it claimed to. Fewer senders and a wider pipe
+# put the packets through the shaper instead of into its tail drop.
+#
+# Figure of merit is ticks per DELIVERED packet, taken from the qdisc's own
+# counters, so a run that still overruns is visible as a drop ratio rather
+# than quietly inflating the cost.
+cake_pkts() { tc -s qdisc show dev vr-r | awk '/Sent/ {print $4; exit}'; }
+cake_drops() { tc -s qdisc show dev vr-r | awk 'match($0,/dropped [0-9]+/) {
+	print substr($0,RSTART+8,RLENGTH-8); exit }'; }
 if need tc && setup_topology; then
-	if tc qdisc replace dev vr-r root cake bandwidth 200mbit 2>/dev/null; then
+	if tc qdisc replace dev vr-r root cake bandwidth 1gbit 2>/dev/null; then
 		ip netns exec $NS_R /tmp/nb sink 1 1 &
 		SINK=$!
 		sleep 0.3
 		for r in 1 2 3; do
+			p0=$(cake_pkts); d0=$(cake_drops)
 			s0=$(awk '/^cpu /{print $3+$4+$7+$8}' /proc/stat)
-			out=$(ip netns exec $NS_L /tmp/nb stream "$PROCS" "$ITERS")
+			out=$(ip netns exec $NS_L /tmp/nb stream 2 $((ITERS / 2)))
 			s1=$(awk '/^cpu /{print $3+$4+$7+$8}' /proc/stat)
-			printf '  run %d: %s  sys+irq ticks=%s\n' "$r" "$out" "$((s1 - s0))"
+			p1=$(cake_pkts); d1=$(cake_drops)
+			printf '  run %d: %s  %s\n' "$r" "$out" \
+				"$(awk -v t=$((s1 - s0)) -v p=$((p1 - p0)) -v d=$((d1 - d0)) 'BEGIN{
+					printf "ticks=%d  delivered=%d  dropped=%d  ticks/kpkt=%s", t, p, d,
+					       (p > 0 ? sprintf("%.2f", 1000.0*t/p) : "n/a")
+					if (p + d > 0 && d > p)
+						printf "  !! more dropped than delivered: dequeue path underweighted" }')"
 		done
 		kill $SINK 2>/dev/null
 		echo "  qdisc stats:"
@@ -374,15 +558,27 @@ if setup_topology; then
 		ip link set nbp${i}p up 2>/dev/null
 	done
 	echo "  bridge with 4 ports up; ARP entries before: $(ip neigh show | wc -l)"
+	# -w 1 -W 1, not -W0. The first run of this section used "-c1 -W0"
+	# against 200 addresses that by construction never answer. -W 0 in
+	# iputils does not mean "no timeout", it means "wait forever":
+	# measured, `ping -c1 -W0` to an unreachable host was still blocked
+	# when killed at 30s. The script sat in this loop until the run was
+	# killed -- the GUEST was fine, a userspace ping was blocked in
+	# recvmsg by its own argument, and no kernel was involved. Both caps
+	# are needed: -W bounds the wait for a reply, -w the whole invocation.
 	t0=$(date +%s.%N)
-	for j in $(seq 1 200); do
-		ip netns exec $NS_L ping -c1 -W0 -q 10.99.1.$((j % 250 + 3)) >/dev/null 2>&1
+	for j in $(seq 1 50); do
+		ip netns exec $NS_L ping -c1 -w1 -W1 -q 10.99.1.$((j % 250 + 3)) \
+			>/dev/null 2>&1
 	done
 	t1=$(date +%s.%N)
-	echo "  200 ARP resolutions for absent hosts: $(awk -v a=$t0 -v b=$t1 'BEGIN{printf "%.2f s", b-a}')"
-	echo "  NOTE: this is a weak proxy. It measures ARP timeout, not the"
-	echo "  per-frame path cost, and a real measurement needs a frame"
-	echo "  generator on the bridge. Treat as a smoke test, not a result."
+	echo "  50 ARP resolutions for absent hosts: $(awk -v a=$t0 -v b=$t1 'BEGIN{printf "%.2f s", b-a}')"
+	echo "  NOT A RESULT FOR PATCH 6. This times ARP resolution timeout,"
+	echo "  which is dominated by the 1s cap above and says nothing about"
+	echo "  br_do_proxy_suppress_arp() per-frame cost. Measuring that needs"
+	echo "  a raw ARP frame generator on a bridge port, which this harness"
+	echo "  does not have. Patch 6 is unmeasured, and the report must say so"
+	echo "  rather than quote this number."
 	for i in 1 2 3 4; do ip link del nbp$i 2>/dev/null; done
 	ip link del nbbr0 2>/dev/null
 fi
@@ -392,7 +588,9 @@ echo
 echo "### GRO receive (patch 5)"
 echo "  the gro list walk is wasted for any protocol with no ->gro_receive."
 echo "  Compare GRO on against GRO off on the receiving veth."
-if need ethtool && setup_topology; then
+if ! need ethtool; then
+	:
+elif setup_topology; then
 	ip netns exec $NS_R /tmp/nb sink 1 1 &
 	SINK=$!
 	sleep 0.3
@@ -404,7 +602,10 @@ if need ethtool && setup_topology; then
 	done
 	kill $SINK 2>/dev/null
 else
-	echo "  ethtool unavailable -- section skipped"
+	# Not "ethtool unavailable": need() already printed if that was the
+	# cause. Reaching here means the topology failed, and saying ethtool
+	# sent the first investigation of this skip in the wrong direction.
+	echo "  topology setup failed -- section skipped"
 fi
 echo
 
@@ -450,11 +651,11 @@ if setup_topology; then
 	sleep 0.3
 	for n in 1 4 16; do
 		[ "$n" -gt "$(nproc)" ] && continue
-		ctl=$(ip netns exec $NS_L /tmp/nb ctl "$n" $((ITERS * 4)) | awk '{print $1}')
-		out=$(ip netns exec $NS_L /tmp/nb stream "$n" "$ITERS")
-		ops=$(echo "$out" | awk '{print $1}')
-		norm=$(awk -v a="$ops" -v b="$ctl" 'BEGIN{if(b>0)printf "%.5f",a/b; else printf "n/a"}')
-		printf '  procs=%-3s %s  ctl=%s  norm=%s\n' "$n" "$out" "$ctl" "$norm"
+		# measure(), not a hand-rolled single control sample: this row
+		# carried no spread= and so could not report when its own
+		# normalisation had stopped meaning anything.
+		printf '  procs=%-3s' "$n"
+		measure "stream" stream "$n"
 	done
 	kill $SINK 2>/dev/null
 else
@@ -486,6 +687,19 @@ echo "### skb->hash on ingress (decides whether GRO can bucket at all)"
 echo "  veth does not set an RSS hash, so skb->hash is computed in software"
 echo "  here. On real hardware this is the single biggest unknown for the"
 echo "  GRO path: if the NIC leaves it zero, every packet lands in bucket 0."
+echo
+
+echo "### control stability"
+awk -v u="$CTL_UNSTABLE" -v t="$CTL_TOTAL" -v lim="$CTL_NOISE_PCT" 'BEGIN{
+	if (t == 0) { print "  no normalised measurements taken"; exit }
+	printf "  %d of %d measurements had the control move more than %d%% while they ran.\n", u, t, lim
+	if (u * 2 > t)
+		print "  MOST ROWS ARE UNUSABLE: treat every norm= above as noise."
+	else if (u > 0)
+		print "  The flagged rows are unusable; the rest are."
+	else
+		print "  The host held still: every norm= above is comparable."
+}'
 echo
 
 echo "############ net-bench complete: $REPORT ############"
