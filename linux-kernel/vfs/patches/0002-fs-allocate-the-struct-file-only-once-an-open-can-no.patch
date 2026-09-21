@@ -1,5 +1,5 @@
-From f02493e31f643fb48110165eb956584d9ef89bd4 Mon Sep 17 00:00:00 2001
-From: Michiel <michieleghuizen@gmail.com>
+From 7fdd4e21bdc7ccc8c4f2aba4e7069b8816e5ca79 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:17:19 +0200
 Subject: [PATCH 02/14] fs: allocate the struct file only once an open can no
  longer fail cheaply

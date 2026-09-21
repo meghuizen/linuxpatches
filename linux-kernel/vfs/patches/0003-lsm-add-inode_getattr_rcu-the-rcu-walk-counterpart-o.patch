@@ -1,5 +1,5 @@
-From 14d203d3f47a833436065107bc172b8a6d2001f1 Mon Sep 17 00:00:00 2001
-From: Michiel <michieleghuizen@gmail.com>
+From 38bdc975f4786d4cf3f59f7165520428ca1fcd39 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:21:02 +0200
 Subject: [PATCH 03/14] lsm: add inode_getattr_rcu, the rcu-walk counterpart of
  inode_getattr

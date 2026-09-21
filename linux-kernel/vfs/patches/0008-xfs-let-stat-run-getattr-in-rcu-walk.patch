@@ -1,5 +1,5 @@
-From a2517dc9cdb04f3bb91b6a296f0893ddeffc2895 Mon Sep 17 00:00:00 2001
-From: Michiel <michieleghuizen@gmail.com>
+From 082ac13b3045338830bd3018787e964adf96f932 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:27:20 +0200
 Subject: [PATCH 08/14] xfs: let stat() run ->getattr in rcu-walk
 

@@ -1,5 +1,5 @@
-From a9384ddeca2a15dd848f71b360016a604f3b9704 Mon Sep 17 00:00:00 2001
-From: Michiel <michieleghuizen@gmail.com>
+From 3d60fe86f6d723e633acd8b950eb32c66c97ee7d Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:29:22 +0200
 Subject: [PATCH 09/14] fs: embed the LSM's per-file blob in the struct file
  allocation

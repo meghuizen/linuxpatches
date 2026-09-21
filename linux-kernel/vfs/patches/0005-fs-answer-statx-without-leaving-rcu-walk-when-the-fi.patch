@@ -1,5 +1,5 @@
-From 4272058b7a610467f0d1c4ad220849af571af56a Mon Sep 17 00:00:00 2001
-From: Michiel <michieleghuizen@gmail.com>
+From 7577060050cd4b13b870fce502d3d35db71afad9 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:25:40 +0200
 Subject: [PATCH 05/14] fs: answer statx() without leaving rcu-walk when the
  filesystem allows it

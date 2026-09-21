@@ -1,5 +1,5 @@
-From 9d9b0d6276ab2b0f67998f972a99d18387cf21c8 Mon Sep 17 00:00:00 2001
-From: Michiel <michieleghuizen@gmail.com>
+From 45c2ce51e90e6269af0fd98a23118844da48707f Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:26:13 +0200
 Subject: [PATCH 06/14] ext4: let stat() run ->getattr in rcu-walk
 

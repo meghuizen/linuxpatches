@@ -1,5 +1,5 @@
-From d1a90216a966c566a07870fbaf3049c894324287 Mon Sep 17 00:00:00 2001
-From: Michiel <michieleghuizen@gmail.com>
+From 47bd9f325d2198a1df01ee215277167f66acc4fd Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:26:51 +0200
 Subject: [PATCH 07/14] btrfs: let stat() run ->getattr in rcu-walk
 
