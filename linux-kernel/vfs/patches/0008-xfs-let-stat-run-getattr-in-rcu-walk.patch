@@ -1,7 +1,7 @@
-From 80ac64f6f3f8a24e34cae5cbcd288c429263d09c Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From a2517dc9cdb04f3bb91b6a296f0893ddeffc2895 Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:27:20 +0200
-Subject: [PATCH] xfs: let stat() run ->getattr in rcu-walk
+Subject: [PATCH 08/14] xfs: let stat() run ->getattr in rcu-walk
 
 Set IOP_GETATTR_RCU in xfs_setup_iops(), which every xfs inode passes
 through and where all four inode_operations tables, each with

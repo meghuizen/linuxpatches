@@ -1,7 +1,7 @@
-From 61b7c20573a52241b2123114dc1089d1d94e622b Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From a137b1cb184ff83eb57f7e0e62b3f6c7636561ef Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:29:23 +0200
-Subject: [PATCH] fs: place inode->i_data on a cacheline boundary
+Subject: [PATCH 13/14] fs: place inode->i_data on a cacheline boundary
 
 The next patch groups address_space's read-mostly fields (host, a_ops,
 gfp_mask, wb_err, flags) at the front of the struct. The dominant
@@ -82,10 +82,10 @@ index ba7da39be4a3..63a9656bdffe 100644
  	inode_cachep = kmem_cache_create("inode_cache",
  					 sizeof(struct inode),
 diff --git a/include/linux/fs.h b/include/linux/fs.h
-index 6b3b577d310a..346d005d1918 100644
+index 290af5723517..b04f3fd32b60 100644
 --- a/include/linux/fs.h
 +++ b/include/linux/fs.h
-@@ -873,7 +873,17 @@ struct inode {
+@@ -867,7 +867,17 @@ struct inode {
  #if defined(CONFIG_IMA) || defined(CONFIG_FILE_LOCKING)
  	atomic_t		i_readcount; /* struct files open RO */
  #endif
@@ -104,7 +104,7 @@ index 6b3b577d310a..346d005d1918 100644
  	union {
  		struct list_head	i_devices;
  		int			i_linklen;
-@@ -885,6 +895,15 @@ struct inode {
+@@ -879,6 +889,15 @@ struct inode {
  		unsigned		i_dir_seq;
  	};
  

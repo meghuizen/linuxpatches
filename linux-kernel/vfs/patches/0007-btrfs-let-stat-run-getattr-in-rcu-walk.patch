@@ -1,7 +1,7 @@
-From 0f1716f35b902e8706a76ccf4092e2b2a57a2aed Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From d1a90216a966c566a07870fbaf3049c894324287 Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:26:51 +0200
-Subject: [PATCH] btrfs: let stat() run ->getattr in rcu-walk
+Subject: [PATCH 07/14] btrfs: let stat() run ->getattr in rcu-walk
 
 Set IOP_GETATTR_RCU where btrfs already sets IOP_FASTPERM_MAY_EXEC on
 inodes it reads from disk (btrfs_iget_path()) and inodes it creates

@@ -1,7 +1,7 @@
-From 723760b125a2966ff4845846f32e735f22834c3e Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From 1087f26010d12447a4d514d16d82d69a7d87b9c5 Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:29:23 +0200
-Subject: [PATCH] selftests: point the openat2 target at where the tests
+Subject: [PATCH 10/14] selftests: point the openat2 target at where the tests
  actually live
 
 tools/testing/selftests/Makefile lists "openat2" in TARGETS, but there

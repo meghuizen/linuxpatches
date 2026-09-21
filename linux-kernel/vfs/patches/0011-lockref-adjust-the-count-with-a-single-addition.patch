@@ -1,7 +1,7 @@
-From a6b80f0a71dbbae9eb58482d177545bf57a3a182 Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From 514137a8e4ea0bffc70b3287dff0644aee010164 Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:29:23 +0200
-Subject: [PATCH] lockref: adjust the count with a single addition
+Subject: [PATCH 11/14] lockref: adjust the count with a single addition
 
 The count shares a 64-bit word with the lock, and the cmpxchg loop already
 operates on that word as a whole. Expressing the update as new.count++

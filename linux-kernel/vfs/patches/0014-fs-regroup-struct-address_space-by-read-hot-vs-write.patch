@@ -1,8 +1,8 @@
-From 319eef3c060ced795445f60d113644ba11fd95cc Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From 237c0c53d6fd910d79d1700cc3ba057e8cd0fd21 Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:29:24 +0200
-Subject: [PATCH] fs: regroup struct address_space by read-hot vs write-hot
- fields
+Subject: [PATCH 14/14] fs: regroup struct address_space by read-hot vs
+ write-hot fields
 
 The fields written on every page-cache add and remove (i_pages, nrpages,
 writeback_index) are interleaved with the fields read on every fault,
@@ -58,10 +58,10 @@ linux-kernel/04-address-space-false-sharing.md
  1 file changed, 37 insertions(+), 7 deletions(-)
 
 diff --git a/include/linux/fs.h b/include/linux/fs.h
-index 346d005d1918..875eeb2b7201 100644
+index b04f3fd32b60..d7f7734ad5b7 100644
 --- a/include/linux/fs.h
 +++ b/include/linux/fs.h
-@@ -475,18 +475,48 @@ struct mapping_metadata_bhs {
+@@ -469,18 +469,48 @@ struct mapping_metadata_bhs {
   * @i_private_lock: For use by the owner of the address_space.
   */
  struct address_space {

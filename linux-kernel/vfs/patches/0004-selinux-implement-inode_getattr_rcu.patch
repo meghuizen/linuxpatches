@@ -1,7 +1,7 @@
-From 10ce129273d24754df72d8395b5159f507490b9a Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From 034563954ed8a990a5db645db677d6bb01571c7e Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:21:35 +0200
-Subject: [PATCH] selinux: implement inode_getattr_rcu
+Subject: [PATCH 04/14] selinux: implement inode_getattr_rcu
 
 Same decision as selinux_inode_getattr(), FILE__GETATTR on the inode's
 label, reached without sleeping.

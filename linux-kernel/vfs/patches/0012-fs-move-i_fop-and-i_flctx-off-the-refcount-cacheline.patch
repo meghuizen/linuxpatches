@@ -1,8 +1,8 @@
-From 3aab1330583433356a94b4140a03575e7d4a4dec Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From 10748117a7cce297227de65fbb3fbe50d67d4b25 Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:29:23 +0200
-Subject: [PATCH] fs: move i_fop and i_flctx off the refcount cacheline in
- struct inode
+Subject: [PATCH 12/14] fs: move i_fop and i_flctx off the refcount cacheline
+ in struct inode
 
 i_fop is set once at inode setup and read by do_dentry_open() on every
 open() (fs/open.c, f->f_op = fops_get(inode->i_fop)). i_flctx is read on
@@ -41,10 +41,10 @@ linux-kernel/03-inode-false-sharing.md
  1 file changed, 15 insertions(+), 5 deletions(-)
 
 diff --git a/include/linux/fs.h b/include/linux/fs.h
-index babc5cb502e7..6b3b577d310a 100644
+index 69846ffea3c5..290af5723517 100644
 --- a/include/linux/fs.h
 +++ b/include/linux/fs.h
-@@ -793,6 +793,21 @@ struct inode {
+@@ -787,6 +787,21 @@ struct inode {
  	void			*i_security;
  #endif
  
@@ -66,7 +66,7 @@ index babc5cb502e7..6b3b577d310a 100644
  	/* Stat data, not accessed from path walking */
  	u64			i_ino;
  	/*
-@@ -858,11 +873,6 @@ struct inode {
+@@ -852,11 +867,6 @@ struct inode {
  #if defined(CONFIG_IMA) || defined(CONFIG_FILE_LOCKING)
  	atomic_t		i_readcount; /* struct files open RO */
  #endif

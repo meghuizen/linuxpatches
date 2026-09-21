@@ -1,7 +1,7 @@
-From 58dc43bdde44c4238a171d6a93eb923838854aea Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From a9384ddeca2a15dd848f71b360016a604f3b9704 Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:29:22 +0200
-Subject: [PATCH] fs: embed the LSM's per-file blob in the struct file
+Subject: [PATCH 09/14] fs: embed the LSM's per-file blob in the struct file
  allocation
 
 On a kernel with an LSM that keeps per-file state - SELinux, AppArmor,
@@ -45,7 +45,7 @@ backing_file has its own second blob for the user-visible file
  5 files changed, 63 insertions(+), 28 deletions(-)
 
 diff --git a/fs/file_table.c b/fs/file_table.c
-index 9a3f6a569165..4c60e3cf0568 100644
+index c68b8c0a4097..b9decab94b40 100644
 --- a/fs/file_table.c
 +++ b/fs/file_table.c
 @@ -176,11 +176,31 @@ static int __init init_fs_stat_sysctls(void)

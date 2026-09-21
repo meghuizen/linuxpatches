@@ -1,7 +1,7 @@
-From 37831fd1a937d73389e716410db61b9174e77701 Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From 14d203d3f47a833436065107bc172b8a6d2001f1 Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:21:02 +0200
-Subject: [PATCH] lsm: add inode_getattr_rcu, the rcu-walk counterpart of
+Subject: [PATCH 03/14] lsm: add inode_getattr_rcu, the rcu-walk counterpart of
  inode_getattr
 
 stat() is the one path-based syscall whose operation does not need the

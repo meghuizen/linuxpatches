@@ -52,16 +52,17 @@ allocations and two frees (struct file and the LSM blob) where one of each
 would do, and on every failed open all of the above from alloc_empty_file
 onwards for a file that is thrown away.
 
-### open + close, after (patches 1, 2, 3, 10)
+### open + close, after (patches 1, 2, 9)
 
 | # | operation | before | after |
 |--:|---|---|---|
 | 3, 8 | second dentry get, its put | 2 RMW on dentry L2 | gone (patch 1) |
-| 5, 11 | module refcount | 2 RMW on a machine-wide word | gone on modular filesystems (patch 2) |
-| — | LSM blob alloc/free | 2 slab ops | gone (patch 10) |
-| — | failed open | full file alloc/free + cred pair | gone (patch 3) |
+| 5, 11 | module refcount | 2 RMW on a machine-wide word | **unchanged** — the patch that removed it was withdrawn, see 2.1 |
+| — | LSM blob alloc/free | 2 slab ops | gone (patch 9) |
+| — | failed open | full file alloc/free + cred pair | gone (patch 2) |
 
-Dentry L2 traffic per cycle: 4 → 2. Machine-wide contended words: 1 → 0.
+Dentry L2 traffic per cycle: 4 → 2. Machine-wide contended words: 1 → 1
+(the module refcount stays; see 2.1).
 Remaining shared writes are the ones that carry semantics: the file's own
 dentry reference, the inode's reader count, the process's fd table and cred.
 
@@ -87,48 +88,54 @@ shared writes.
 
 ## 2. The three things found by reading
 
-### 2.1 The module reference nobody needed (patch 2)
+### 2.1 The module reference nobody needed — WITHDRAWN
+
+**This patch was in the series and has been removed. It is kept here because
+the analysis is still correct and someone will rediscover the idea.**
 
 `do_dentry_open()` does `f->f_op = fops_get(inode->i_fop)` and `__fput()`
-does `fops_put(file->f_op)`. `fops_get` is `try_module_get(owner)`, which is
+does `fops_put(file->f_op)`. `fops_get` is `try_module_get(owner)`, a cmpxchg
+loop on one `atomic_t` per module -- a single word for the whole machine.
+Every open and every close on a filesystem built as a module lands two
+contended RMWs on it, regardless of which file, directory or CPU. xfs, btrfs,
+nfs, cifs, overlayfs and fuse are modules on every distribution.
 
-    atomic_inc_not_zero(&module->refcnt)
-
-and `module_put` is `atomic_dec_if_positive`. Both are cmpxchg loops on one
-`atomic_t` per module — a single word for the whole machine. Every open and
-every close on a filesystem built as a module lands two contended RMWs on it,
-regardless of which file, directory or CPU. xfs, btrfs, nfs, cifs, overlayfs
-and fuse are modules on every distribution; ext4 is on some.
-
-It is unnecessary because `sget_fc()` already does `get_filesystem(s->s_type)`
-(`fs/super.c:903`) and `deactivate_locked_super()` releases it after
+The reference is redundant: `sget_fc()` already does
+`get_filesystem(s->s_type)` and `deactivate_locked_super()` releases it after
 `kill_sb`. The file holds `f_path.mnt`; the mount holds the superblock active;
-the superblock holds the module. The per-file reference is a second lock on a
-door that is already locked.
+the superblock holds the module.
 
-Why nobody saw it: `will-it-scale` and every microbenchmark in this project
-ran on tmpfs or on a built-in ext4, where `owner` is NULL and `fops_get` costs
-nothing. The dentry contention that Guzik measured (+39% at 20 cores) was the
-*second* most contended word on that path on a distribution kernel; this was
-the first, and it was invisible on the test machines.
+That reasoning still holds. Two things killed the patch anyway.
 
-The patch: when `i_fop->owner == i_sb->s_type->owner`, take no reference and
-set `FMODE_FOPS_BORROWED` (bit 8, which was free). `file_put_fops()` clears
-the bit or calls `fops_put()`. `replace_fops()` goes through it too. Every
-other path that changes `f_op` after open (cifs's direct assignments, mem.c,
-tty, sound) swaps within one module, so a set bit stays correct and a clear
-bit stays correct; the commit message enumerates them. `proofs/Vfsproof/FopsBorrow.lean`
-proves balance and pinning across the three owner cases with and without a
-`replace_fops()`, and rejects the two shortcuts (borrow any module; keep the
-old `replace_fops()`).
+**It costs 17 instructions in `do_dentry_open()` on every open, whether or not
+the filesystem is a module.** Measured by building `fs/open.o` with and
+without the change: 330 instructions against 313. The check
+`f_op->owner == i_sb->s_type->owner` is a three-deep dependent load
+(`inode -> i_sb -> s_type -> owner`) and cannot be made cheaper by
+restructuring -- a version that tested `owner` first, to leave early on a
+built-in filesystem, recovered exactly one instruction because GCC had
+already common-subexpression-eliminated the repeat.
 
-The failure mode this must never have: a module unloaded while a file still
-points into it. It cannot: a module with a mounted superblock has
-`refcnt > MODULE_REF_BASE` from the superblock's reference and `rmmod` returns
-`EBUSY`. The patch does not weaken that; it stops adding to a count that is
-already above the threshold that matters.
+So on a kernel with the filesystem built in -- which is what this project
+benchmarks, `CONFIG_EXT4_FS=y` -- the patch is pure cost with no possible
+benefit. It was one of the contributors to a reproducible +2% cycles-per-open
+regression in the series.
 
-### 2.2 stat does not need a reference (patches 4–9)
+**And the correctness argument has to hold for every filesystem, not the
+common ones.** The invariant is that `f_op` always lives in the module the
+superblock pins. That is true for a plain filesystem and needs rechecking for
+every stacked, synthetic or `replace_fops()`-using path -- `FopsBorrow.lean`
+proved it for the three owner cases, but a proof of the model is not a proof
+that every caller in the tree matches the model. That is a large and permanent
+review burden for two atomics.
+
+Removed on those two grounds together: it cannot pay for itself in the
+configuration we can measure, and it asks reviewers to accept a subtle
+invariant across every filesystem in the tree. If it is revisited, it needs
+wall-clock numbers from a kernel with the filesystem built as a module, where
+the contention it removes is real.
+
+### 2.2 stat does not need a reference (patches 3–8)
 
 `stat` is the one path-based syscall whose operation reads and does nothing
 else. Yet `filename_lookup()` ends with `complete_walk()` → `try_to_unlazy()`
@@ -295,23 +302,25 @@ first so that the openat2 surface is actually tested when patch 6 lands.
 ## 4. Order and dependencies
 
     1  fs: hand the path walk's dentry reference to the opened file
-    2  fs: don't pin the filesystem module per open when the mount already does
-    3  fs: allocate the struct file only once an open can no longer fail cheaply
-    4  lsm: add inode_getattr_rcu, the rcu-walk counterpart of inode_getattr
-    5  selinux: implement inode_getattr_rcu
-    6  fs: answer statx() without leaving rcu-walk when the filesystem allows it
-    7  ext4: let stat() run ->getattr in rcu-walk
-    8  btrfs: let stat() run ->getattr in rcu-walk
-    9  xfs: let stat() run ->getattr in rcu-walk
-    10 fs: embed the LSM's per-file blob in the struct file allocation
-    11 selftests: point the openat2 target at where the tests actually live
-    12 lockref: adjust the count with a single addition
-    13 fs: move i_fop and i_flctx off the refcount cacheline in struct inode
-    14 fs: place inode->i_data on a cacheline boundary
-    15 fs: regroup struct address_space by read-hot vs write-hot fields
+    2  fs: allocate the struct file only once an open can no longer fail cheaply
+    3  lsm: add inode_getattr_rcu, the rcu-walk counterpart of inode_getattr
+    4  selinux: implement inode_getattr_rcu
+    5  fs: answer statx() without leaving rcu-walk when the filesystem allows it
+    6  ext4: let stat() run ->getattr in rcu-walk
+    7  btrfs: let stat() run ->getattr in rcu-walk
+    8  xfs: let stat() run ->getattr in rcu-walk
+    9  fs: embed the LSM's per-file blob in the struct file allocation
+    10 selftests: point the openat2 target at where the tests actually live
+    11 lockref: adjust the count with a single addition
+    12 fs: move i_fop and i_flctx off the refcount cacheline in struct inode
+    13 fs: place inode->i_data on a cacheline boundary
+    14 fs: regroup struct address_space by read-hot vs write-hot fields
 
-Patch 3 touches `do_open()` after patch 1 and is written on top of it.
-Patches 4–9 are one series; 6 is useless without 4, 7–9 are no-ops without 6,
+"fs: don't pin the filesystem module per open when the mount already does"
+was patch 2 and has been withdrawn; see 2.1. Everything after it moved up one.
+
+Patch 2 touches `do_open()` after patch 1 and is written on top of it.
+Patches 3–8 are one series; 5 is useless without 3, 6–8 are no-ops without 5,
 and 5 is what makes 6 do anything on an SELinux system. Everything else is
 independent and separately revertable. 11 and 12 could go first or last.
 
@@ -419,10 +428,11 @@ filesystem boundary. Not a defect.
 
 ## 8. Validation: what is known, what the VM must show, what needs hardware
 
-**Proved** (`proofs/`, 33 theorems, `lake build` silent): reference balance
+**Proved** (`proofs/`, 27 theorems, `lake build` silent): reference balance
 on every exit for patch 1; file ownership on every exit and the NULL-file
-soundness argument for patch 3; module reference balance and pinning for
-patch 2; seqcount soundness and the no-double-walk property for patch 6.
+soundness argument for patch 2; seqcount soundness and the no-double-walk
+property for patch 5. (`FopsBorrow.lean`, 6 theorems, went with the withdrawn
+module-pin patch.)
 
 **Compiled**: every touched object in the kbench configuration, plus xfs,
 btrfs and fscrypt enabled for the opt-in patches; a full `bzImage + modules`

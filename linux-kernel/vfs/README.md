@@ -120,8 +120,8 @@ Two details that cost a rewrite each, kept here so they are not rediscovered:
 - [ ] a `relatime` mount in the rig — the guest root is `noatime`
       (`mkrootfs.sh:48`) so nothing measured has ever included `touch_atime`
 - [ ] one-line selftest fix to send upstream, see below
-- [x] proposal — `05-proposal.md`, 15 patches in `patches/`, all compiled, full build of the series
-- [x] Lean models for the three new mechanisms (`LazyAlloc`, `FopsBorrow`, `RcuStat`), 20 theorems
+- [x] proposal — `05-proposal.md`, 14 patches in `patches/`, all compiled, full build of the series
+- [x] Lean models for the two new mechanisms (`LazyAlloc`, `RcuStat`), 14 theorems
 - [x] `scripts/guest/vfs-verify.sh` — exact hit counts for the predictions in `05-proposal.md` §8 (`KB_EXTRA=kbench.vfsverify=1`)
 - [ ] run vfs-verify on `vfs` and `baseline` and record the two columns
 - [ ] 32-bit size check of patches 13–15 per `40-abi-and-wordsize.md` §5.3

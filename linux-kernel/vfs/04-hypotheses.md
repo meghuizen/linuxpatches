@@ -313,6 +313,13 @@ reason is written down so it is not re-proposed.
 
 ## H11 — `fops_get()` is a machine-wide contended word on every open on a modular filesystem
 
+> **Status: not pursued.** The claim below still stands as analysis. The patch
+> that acted on it was withdrawn from the series: it costs 17 instructions in
+> `do_dentry_open()` on *every* open (measured, 330 vs 313 in `fs/open.o`)
+> including the built-in-filesystem case where it can never pay that back, and
+> its correctness rests on an invariant that has to hold for every filesystem
+> in the tree. See `05-proposal.md` 2.1.
+
 **Claim.** On a filesystem built as a module, every `open()` and every
 `close()` on every CPU performs a cmpxchg on the same `module->refcnt`, and
 the reference it takes is redundant with the one the superblock holds.
@@ -339,9 +346,11 @@ built-in both are 0.
 **Falsified if.** Some in-tree `->open` or `->release` relies on the file's
 own module reference being distinct from the superblock's — i.e. a file whose
 `f_path.mnt` can be dropped before its `f_op` is last used. `__fput()` puts
-fops before `mntput()`, and `proofs/Vfsproof/FopsBorrow.lean` covers the
+fops before `mntput()`, and the withdrawn patch's Lean model covered the
 `replace_fops()` shapes; a counterexample would have to be a direct `f_op`
-assignment to another module's operations, and none was found.
+assignment to another module's operations, and none was found by reading.
+"None was found by reading" across every filesystem in the tree is exactly
+the residual risk that decided the withdrawal.
 
 **Status.** Structural; patch 2. Counter test in `scripts/guest/vfs-verify.sh`.
 

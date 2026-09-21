@@ -125,7 +125,6 @@ Same method, three more files, `lake build` proves all four together.
 | file | patch | what is modelled | theorems |
 |---|---|---|---|
 | `Vfsproof/LazyAlloc.lean` | 3 | the `struct file` across all nine exits of `path_openat()`; that a NULL file at `do_open()` entry implies `lookup_open()` never ran, which is what makes reading `f_mode` from a possibly-NULL file sound; allocation counts before and after, including the `-ECHILD` retry | 9 |
-| `Vfsproof/FopsBorrow.lean` | 2 | balance of `try_module_get`/`module_put` on `f_op->owner` and whether the module is pinned by *something* at every `f_op` dereference, over the three owners (built-in, the filesystem's module, another module) with and without `replace_fops()`; negative controls: borrowing a foreign module (unpinned use), keeping the old `replace_fops()` (underflow) | 6 |
 | `Vfsproof/RcuStat.lean` | 6 | a dentry's inode binding versioned by `d_seq`; every interference (`d_move`, kill, rebind) bumps it, so the rcu-walk stat either retries or answers exactly what the ref-walk stat answers — for hard errors as well as successes, which is why the seqcount is checked before looking at the result; and that the fall-back never performs more walks than today | 5 |
 
 Like `Open.lean`, each file ends with the list of what it does **not** prove:

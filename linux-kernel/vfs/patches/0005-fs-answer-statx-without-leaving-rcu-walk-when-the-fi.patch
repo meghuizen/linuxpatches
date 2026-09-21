@@ -1,7 +1,7 @@
-From 54d22706ddcc480953b3a7b7eae2dd5400cc4601 Mon Sep 17 00:00:00 2001
-From: Michiel <367462+meghuizen@users.noreply.github.com>
+From 4272058b7a610467f0d1c4ad220849af571af56a Mon Sep 17 00:00:00 2001
+From: Michiel <michieleghuizen@gmail.com>
 Date: Sun, 20 Sep 2026 13:25:40 +0200
-Subject: [PATCH] fs: answer statx() without leaving rcu-walk when the
+Subject: [PATCH 05/14] fs: answer statx() without leaving rcu-walk when the
  filesystem allows it
 
 Every stat of a path today ends with complete_walk(): the walk that
@@ -417,10 +417,10 @@ index c461c3054234..9754019559e8 100644
  
  int vfs_fstatat(int dfd, const char __user *filename,
 diff --git a/include/linux/fs.h b/include/linux/fs.h
-index fd56dab9c244..babc5cb502e7 100644
+index f9d1e05e8ae6..69846ffea3c5 100644
 --- a/include/linux/fs.h
 +++ b/include/linux/fs.h
-@@ -633,6 +633,15 @@ is_uncached_acl(struct posix_acl *acl)
+@@ -627,6 +627,15 @@ is_uncached_acl(struct posix_acl *acl)
  #define IOP_CACHED_LINK		0x0040
  #define IOP_FASTPERM_MAY_EXEC	0x0080
  #define IOP_FLCTX		0x0100
