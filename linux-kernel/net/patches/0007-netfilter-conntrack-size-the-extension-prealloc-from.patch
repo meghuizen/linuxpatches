@@ -1,7 +1,7 @@
 From 07d2e4208909513c122254eed3813646cffb36a9 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 10:04:08 +0200
-Subject: [PATCH 7/7] netfilter: conntrack: size the extension prealloc from
+Subject: [PATCH 7/8] netfilter: conntrack: size the extension prealloc from
  the types in use
 
 nf_ct_ext_add() reserves a flat 128 bytes on the first extension so that

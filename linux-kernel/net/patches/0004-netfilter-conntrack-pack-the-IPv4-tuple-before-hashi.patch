@@ -1,7 +1,7 @@
 From 9541e1e287d8f189cea1ab433263203eae90a056 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 09:58:44 +0200
-Subject: [PATCH 4/7] netfilter: conntrack: pack the IPv4 tuple before hashing
+Subject: [PATCH 4/8] netfilter: conntrack: pack the IPv4 tuple before hashing
  it
 
 hash_conntrack_raw() siphashes the whole tuple up to

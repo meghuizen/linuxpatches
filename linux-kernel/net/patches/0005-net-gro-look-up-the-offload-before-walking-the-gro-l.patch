@@ -1,7 +1,7 @@
 From 80c6b09a919e304b9dae8520d266ca716a8021bf Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 09:59:55 +0200
-Subject: [PATCH 5/7] net: gro: look up the offload before walking the gro list
+Subject: [PATCH 5/8] net: gro: look up the offload before walking the gro list
 
 dev_gro_receive() calls gro_list_prepare() and only then searches for a
 packet_offload with a ->gro_receive. For a protocol that has none --

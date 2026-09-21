@@ -1,7 +1,7 @@
 From 55d8f8672ace67a34c1b8422ce9a6c244f2d4189 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 09:51:16 +0200
-Subject: [PATCH 1/7] sch_cake: allow hrtimer slack on the shaper timer
+Subject: [PATCH 1/8] sch_cake: allow hrtimer slack on the shaper timer
 
 CAKE arms its watchdog after almost every shaped packet, always with an
 exact expiry. The hrtimer layer can then coalesce nothing: each packet

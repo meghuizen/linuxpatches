@@ -1,6 +1,6 @@
 # Networking patches — the router forwarding path
 
-Seven patches against **Linux 7.3-rc3**, aimed at a home router: a
+Eight patches against **Linux 7.3-rc3**, aimed at a home router: a
 four-core ARM Cortex-A53 at 2 GHz, 1 GB of RAM, forwarding 1–2.5 Gbit/s.
 
 Nothing here is device- or driver-specific. Every patch is in generic
@@ -35,7 +35,7 @@ enough to be offloaded. A DNS query or a QUIC handshake is a flow of two
 packets: it pays the full conntrack setup and teardown, pays the
 flowtable hash and miss on every packet, and then falls through to the
 software path anyway. **The dominant cost of modern router traffic is
-per-flow, not per-packet.** Four of the seven patches attack that.
+per-flow, not per-packet.** Five of the eight patches attack that.
 
 ## The patches
 
@@ -48,6 +48,7 @@ per-flow, not per-packet.** Four of the seven patches attack that.
 | 5 | `net/core/gro` | Look up the offload before walking the GRO list, not after |
 | 6 | `bridge` | Skip the proxy-ARP path when no port has asked for it |
 | 7 | `nf_conntrack` | Size the extension prealloc from the types compiled in, not a flat 128 |
+| 8 | `nf_conntrack` | Save the raw tuple hashes at confirm; teardown rescales instead of rehashing |
 
 Patch 1 is the largest single win and the least interesting technically:
 CAKE arms a timer after nearly every shaped packet with **zero slack**, so
@@ -63,13 +64,29 @@ router. Both fixes keep the hash function and its key, shorten only the
 message, and still compare the full key on a hit — so a collision costs a
 comparison and can never produce a wrong match.
 
+## Why patch 8 is safe when sharing hashes generally is not
+
+Each subsystem hashes under its own secret -- `hashrnd` in the flow
+dissector, `nf_conntrack_hash_rnd`, `nf_nat_hash_rnd`, `inet_ehash_secret`,
+a per-table `hash_rnd` in every rhashtable. That separation is deliberate:
+an attacker who recovers one key gains nothing against the others. Feeding
+one computed hash to several subsystems would collapse that into a single
+point of failure, so **do not** "optimise" the repeated hashing across
+subsystem boundaries.
+
+Patch 8 is not that. It caches one subsystem's own value, under its own
+key, for reuse a few microseconds later in the same subsystem, where the
+recomputation produces a provably identical result. It also caches the
+*raw* hash rather than the scaled one, because scaling depends on the
+table size and a resize must still be picked up.
+
 ## Backwards compatibility
 
 No UAPI is removed or changed. Patch 1 adds one optional netlink
 attribute; old userspace does not send it and ignores it on dump, and its
 default reproduces today's behaviour exactly. Everything else is internal.
 
-All seven compile on x86_64. Struct offsets quoted in the commit messages
+All eight compile on x86_64. Struct offsets quoted in the commit messages
 were taken from a built object, not from reading the header.
 
 ## What was measured, and what was not
