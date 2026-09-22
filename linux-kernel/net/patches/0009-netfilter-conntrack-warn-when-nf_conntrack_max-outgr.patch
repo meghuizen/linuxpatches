@@ -1,0 +1,113 @@
+From 92f1b8efc5c8703bc07e01c828d6689c97392cf4 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Tue, 22 Sep 2026 07:10:10 +0200
+Subject: [PATCH 9/9] netfilter: conntrack: warn when nf_conntrack_max outgrows
+ the hash table
+
+Every flow occupies two hash entries, one per direction, so the average
+chain length is 2 * nf_conntrack_max / nf_conntrack_htable_size.
+nf_conntrack_init_init() sets max == htable_size deliberately, to hold
+that at two:
+
+	/* Use a max. factor of one by default to keep the average
+	 * hash chain length at 2 entries. */
+	max_factor = 1;
+
+nf_conntrack_max is then exposed as a plain sysctl int with
+proc_dointvec_minmax and no relation to the table. Raising it does not
+resize anything, and nothing says so. Every router tuning guide tells
+people to raise it.
+
+The cost is not memory, which is what the documentation warns about. It
+is the chain walk: __nf_conntrack_confirm() scans both the original and
+the reply bucket with a full nf_ct_key_equal() per entry before it may
+insert, and each entry is a separate nf_conn, so the walk is one cache
+miss per entry. Past MIN_CHAINLEN the insert is abandoned and the packet
+dropped (chaintoolong, insert_failed, NF_DROP) -- a silent connection
+failure under exactly the load the admin raised the limit for.
+
+Measured in a 16-core guest forwarding UDP with a new 5-tuple per packet,
+against a table sized as the kernel intended:
+
+	max/buckets    avg chain    new flows/s
+	         1             2       ~964,000
+	        24           7.3       ~604,000     -60%
+
+Warn past a factor of 8 -- the largest the kernel itself ever picks, the
+old behaviour when hashsize is given explicitly -- so a deliberate modest
+overcommit stays quiet and only the pathological ratios are reported.
+Rate-limited; no behaviour change beyond the message.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XVxrZjHzxnmyA7MDozho8A
+---
+ net/netfilter/nf_conntrack_standalone.c | 39 +++++++++++++++++++++++--
+ 1 file changed, 37 insertions(+), 2 deletions(-)
+
+diff --git a/net/netfilter/nf_conntrack_standalone.c b/net/netfilter/nf_conntrack_standalone.c
+index f4f2d82192d5..3d243272a66e 100644
+--- a/net/netfilter/nf_conntrack_standalone.c
++++ b/net/netfilter/nf_conntrack_standalone.c
+@@ -536,6 +536,41 @@ EXPORT_SYMBOL_GPL(nf_conntrack_count);
+ /* size the user *wants to set */
+ static unsigned int nf_conntrack_htable_size_user __read_mostly;
+ 
++/* Every flow takes two hash entries, one per direction, so the average chain
++ * length is 2 * nf_conntrack_max / nf_conntrack_htable_size.
++ * nf_conntrack_init_init() picks max == htable_size precisely to hold that at
++ * two. Raising max on its own does not resize the table, and nothing warns:
++ * __nf_conntrack_confirm() walks both chains with a full nf_ct_key_equal() per
++ * entry before it may insert, so setup cost grows linearly with the ratio, and
++ * once a chain reaches MIN_CHAINLEN the insert is abandoned and the packet
++ * dropped. Measured on a 16-core guest, a ratio of 24 (chain 7.3) cost 60% of
++ * the new-flow rate against a table sized as the kernel intended.
++ *
++ * Warn only past a ratio of 8, the largest factor the kernel itself ever
++ * chooses (the old behaviour when hashsize is given explicitly), so a
++ * deliberate, modest overcommit stays silent.
++ */
++#define NF_CT_MAX_FACTOR_WARN 8
++
++static int
++nf_conntrack_max_sysctl(const struct ctl_table *table, int write,
++			void *buffer, size_t *lenp, loff_t *ppos)
++{
++	unsigned int hsize;
++	int ret;
++
++	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
++	if (ret || !write)
++		return ret;
++
++	hsize = READ_ONCE(nf_conntrack_htable_size);
++	if (hsize && nf_conntrack_max > NF_CT_MAX_FACTOR_WARN * hsize)
++		pr_warn_ratelimited("nf_conntrack: nf_conntrack_max=%u over %u buckets averages %u entries per hash chain; raise nf_conntrack_buckets as well, or connection setup will slow down and eventually fail\n",
++				    nf_conntrack_max, hsize,
++				    2 * nf_conntrack_max / hsize);
++	return 0;
++}
++
+ static int
+ nf_conntrack_hash_sysctl(const struct ctl_table *table, int write,
+ 			 void *buffer, size_t *lenp, loff_t *ppos)
+@@ -645,7 +680,7 @@ static const struct ctl_table nf_ct_sysctl_table[] = {
+ 		.data		= &nf_conntrack_max,
+ 		.maxlen		= sizeof(int),
+ 		.mode		= 0644,
+-		.proc_handler	= proc_dointvec_minmax,
++		.proc_handler	= nf_conntrack_max_sysctl,
+ 		.extra1		= SYSCTL_ONE,
+ 		.extra2		= SYSCTL_INT_MAX,
+ 	},
+@@ -926,7 +961,7 @@ static struct ctl_table nf_ct_netfilter_table[] = {
+ 		.data		= &nf_conntrack_max,
+ 		.maxlen		= sizeof(int),
+ 		.mode		= 0644,
+-		.proc_handler	= proc_dointvec_minmax,
++		.proc_handler	= nf_conntrack_max_sysctl,
+ 		.extra1		= SYSCTL_ONE,
+ 		.extra2		= SYSCTL_INT_MAX,
+ 	},
+-- 
+2.53.0
+

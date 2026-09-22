@@ -1,7 +1,7 @@
 From 31179d3c15b41ea8c370cf0ae41e77f4ed016635 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 10:26:46 +0200
-Subject: [PATCH 8/8] netfilter: conntrack: save the raw tuple hashes for
+Subject: [PATCH 8/9] netfilter: conntrack: save the raw tuple hashes for
  teardown
 
 __nf_ct_delete_from_lists() siphashes both tuples again, purely to
@@ -139,3 +139,6 @@ index f0c84372101f..aca315525b52 100644
  	} while (nf_conntrack_double_lock(hash, reply_hash, sequence));
  
  	/* We're not in hash table, and we refuse to set up related
+-- 
+2.53.0
+

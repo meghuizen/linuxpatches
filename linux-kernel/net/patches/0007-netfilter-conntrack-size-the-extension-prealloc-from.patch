@@ -1,7 +1,7 @@
 From 027380c2806329e8d5f6cba7c329527933d68062 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 10:04:08 +0200
-Subject: [PATCH 7/8] netfilter: conntrack: size the extension prealloc from
+Subject: [PATCH 7/9] netfilter: conntrack: size the extension prealloc from
  the types in use
 
 nf_ct_ext_add() reserves a flat 128 bytes on the first extension so that
@@ -67,3 +67,6 @@ index 0da105e1ded9..54f0291525d2 100644
  
  static const u8 nf_ct_ext_type_len[NF_CT_EXT_NUM] = {
  	[NF_CT_EXT_HELPER] = sizeof(struct nf_conn_help),
+-- 
+2.53.0
+

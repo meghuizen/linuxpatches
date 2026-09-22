@@ -1,7 +1,7 @@
 From 3b133be69f0a05f90a6d51b59582d02ac617bb72 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 09:55:49 +0200
-Subject: [PATCH 3/8] netfilter: nf_flow_table: skip the all-zero key tail when
+Subject: [PATCH 3/9] netfilter: nf_flow_table: skip the all-zero key tail when
  hashing
 
 flow_offload_hash() jhashes the whole key, up to __hash:
@@ -104,3 +104,6 @@ index 934c6151f558..87523869b1cd 100644
  }
  
  static int flow_offload_hash_cmp(struct rhashtable_compare_arg *arg,
+-- 
+2.53.0
+

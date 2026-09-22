@@ -1,7 +1,7 @@
 From 2dec428ee47f4902632a09d95267911eae648c99 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 10:02:48 +0200
-Subject: [PATCH 6/8] bridge: skip the proxy ARP path when no port asks for it
+Subject: [PATCH 6/9] bridge: skip the proxy ARP path when no port asks for it
 
 br_handle_frame_finish() calls br_do_proxy_suppress_arp() for every ARP
 and RARP frame, unconditionally. The IPv6 neighbour-suppression branch
@@ -106,3 +106,6 @@ index b01997ea9508..c697347e1f71 100644
  	BROPT_MTU_SET_BY_USER,
  	BROPT_VLAN_STATS_PER_PORT,
  	BROPT_NO_LL_LEARN,
+-- 
+2.53.0
+

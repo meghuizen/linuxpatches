@@ -1,7 +1,7 @@
 From c00497d36847512626f9b1e315669ccf29333e3f Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 09:58:44 +0200
-Subject: [PATCH 4/8] netfilter: conntrack: pack the IPv4 tuple before hashing
+Subject: [PATCH 4/9] netfilter: conntrack: pack the IPv4 tuple before hashing
  it
 
 hash_conntrack_raw() siphashes the whole tuple up to
@@ -78,3 +78,6 @@ index d0d9e5ea84a0..f0c84372101f 100644
  	return siphash((void *)tuple,
  			offsetofend(struct nf_conntrack_tuple, dst.__nfct_hash_offsetend),
  			&key);
+-- 
+2.53.0
+

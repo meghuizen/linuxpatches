@@ -1,7 +1,7 @@
 From 1a444de0665e1bad5c3053b631bb393da9e17294 Mon Sep 17 00:00:00 2001
 From: kbench <kbench@localhost>
 Date: Mon, 21 Sep 2026 09:53:12 +0200
-Subject: [PATCH 2/8] sch_cake: replace the per-refill get_random_u16() with a
+Subject: [PATCH 2/9] sch_cake: replace the per-refill get_random_u16() with a
  Weyl sequence
 
 cake_get_flow_quantum() dithers the quantum so that the roundoff of the
@@ -73,3 +73,6 @@ index 1fdc185f54fe..57212f34b168 100644
  }
  
  static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
+-- 
+2.53.0
+

@@ -1,6 +1,6 @@
 # Networking patches — the router forwarding path
 
-Eight patches against **Linux 7.3-rc3**, aimed at a home router: a
+Nine patches against **Linux 7.3-rc3**, aimed at a home router: a
 four-core ARM Cortex-A53 at 2 GHz, 1 GB of RAM, forwarding 1–2.5 Gbit/s.
 
 Nothing here is device- or driver-specific. Every patch is in generic
@@ -49,6 +49,7 @@ per-flow, not per-packet.** Five of the eight patches attack that.
 | 6 | `bridge` | Skip the proxy-ARP path when no port has asked for it |
 | 7 | `nf_conntrack` | Size the extension prealloc from the types compiled in, not a flat 128 |
 | 8 | `nf_conntrack` | Save the raw tuple hashes at confirm; teardown rescales instead of rehashing |
+| 9 | `nf_conntrack` | Warn when `nf_conntrack_max` is raised past the hash table it does not resize |
 
 Patch 1 is the largest single win and the least interesting technically:
 CAKE arms a timer after nearly every shaped packet with **zero slack**, so
@@ -192,7 +193,26 @@ These plausibly matter more than several of the patches above.
 - **`nf_conntrack_max` is 8192 on a 1 GB router**, derived from RAM at
   init. QUIC's 120 s idle timeout makes that ceiling reachable, and
   `early_drop` then preferentially evicts non-ASSURED entries — the fresh
-  DNS and QUIC handshakes. Raising it costs about 400 bytes per flow.
+  DNS and QUIC handshakes.
+
+  **Raise `nf_conntrack_buckets` with it.** An earlier version of this note
+  said raising the limit "costs about 400 bytes per flow", which is true and
+  is not the part that matters. `nf_conntrack_max` is a plain sysctl int: it
+  does not resize the hash table. The kernel picks `max == htable_size` at
+  init precisely to keep the average chain at two entries, because every flow
+  takes two of them. Raise the limit alone and the chain grows in proportion,
+  and `__nf_conntrack_confirm()` walks both buckets with a full tuple compare
+  per entry — one cache miss each, since every entry is a different
+  `nf_conn`. Past `MIN_CHAINLEN` it stops inserting and drops the packet.
+
+  Measured here, 16 cores forwarding UDP with a new 5-tuple per packet:
+
+  | max / buckets | avg chain | new flows/s |
+  |---|---|---|
+  | 1 (the default) | 2 | ~964,000 |
+  | 24 | 7.3 | ~604,000 (**−60%**) |
+
+  Patch 9 adds the warning the kernel does not currently emit.
 - **Check whether the NIC sets `skb->hash` on ingress.** GRO's bucket
   index and its per-entry fast reject are both `skb_get_hash_raw()`, a
   bare read of that field. If it is zero, every packet lands in bucket 0
