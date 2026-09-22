@@ -424,10 +424,19 @@ if need nft && setup_topology && ruleset_ct; then
 	# whether the table was under pressure. Without these, saturation has
 	# to be inferred from the entry count, which only shows the ceiling was
 	# reached, not what it cost.
+	# Hex, summed in the shell. awk's strtonum() is a GAWK extension and the
+	# guest has mawk ("function strtonum never defined"), so the awk version
+	# of this silently reported 0 on every row -- including the over-table
+	# regime where early_drop must be in the millions.
 	ctstat() { # ctstat <column-name>
-		awk -v want="$1" 'NR==1 { for (i = 1; i <= NF; i++) if ($i == want) c = i; next }
-			 c { t += strtonum("0x" $c) } END { print t + 0 }' \
-			/proc/net/stat/nf_conntrack 2>/dev/null || echo 0
+		local col total=0 v
+		col=$(awk -v w="$1" 'NR==1{for(i=1;i<=NF;i++) if($i==w){print i;exit}}' \
+			/proc/net/stat/nf_conntrack 2>/dev/null)
+		[ -n "$col" ] || { echo 0; return; }
+		while read -r v; do
+			total=$(( total + 16#$v ))
+		done < <(awk -v c="$col" 'NR>1{print $c}' /proc/net/stat/nf_conntrack)
+		echo "$total"
 	}
 
 	# TWO regimes, reported separately, because they exercise different
