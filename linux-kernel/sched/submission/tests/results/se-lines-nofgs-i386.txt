@@ -1,0 +1,38 @@
+se @96 -> @96 in task_struct, 64-byte lines, task_struct lines are absolute
+  3 -> 2  better  pick_eevdf() heap search, per entity visited
+         before [1, 2, 3]  after [1, 2]
+  2 -> 1  better  rb insert walk (__entity_less), per entity visited
+         before [1, 2]  after [1]
+  3 -> 2  better  augment propagate/rotate (min_vruntime_update), per entity
+         before [1, 2, 3]  after [1, 2]
+  3 -> 3  same    update_curr() on a task se (+update_se, update_deadline, protect_slice, update_curr_fair walk)
+         before [1, 2, 3]  after [1, 2, 3]  (absent: my_q parent cfs_rq)
+  1 -> 1  same    update_curr() on a group se
+         before [2]  after [3]  (absent: my_q parent cfs_rq)
+  1 -> 1  same    update_se() via update_curr_common() (rt, dl, scx, stop)
+         before [2]  after [3]  (absent: my_q)
+  3 -> 3  same    PELT __update_load_avg_se() on a task se
+         before [1, 2, 4]  after [2, 3, 4]  (absent: my_q)
+  3 -> 3  same    PELT __update_load_avg_se() on a group se
+         before [1, 2, 4]  after [2, 3, 4]  (absent: my_q runnable_weight)
+  4 -> 4  same    enqueue of a waking task (place_entity, enqueue_entity, __enqueue_entity)
+         before [1, 2, 3, 4]  after [1, 2, 3, 4]  (absent: my_q cfs_rq parent)
+  4 -> 4  same    dequeue of a sleeping task (update_entity_lag, dequeue_entity, __dequeue_entity)
+         before [1, 2, 3, 4]  after [1, 2, 3, 4]  (absent: my_q cfs_rq parent)
+  4 -> 4  same    set_next_entity() + set_protect_slice()
+         before [1, 2, 3, 4]  after [1, 2, 3, 4]  (absent: my_q)
+  2 -> 2  same    detach_tasks() scan, per task (group_node walk, can_migrate_task, task_hot, task_h_load)
+         before [2, 4]  after [3, 4]  (absent: cfs_rq)
+  2 -> 2  same    set_task_cpu() on migration (migrate_task_rq_fair, set_task_rq)
+         before [3, 4]  after [3, 4]  (absent: cfs_rq parent depth)
+
+se members by absolute task_struct line (64-byte), lines whose membership changed:
+  line 1: + min_vruntime vruntime
+          - h_load load
+          = deadline run_node
+  line 2: + h_load load slice vlag vprot
+          - custom_slice deadline exec_start group_node on_rq rel_deadline sched_delayed sum_exec_runtime
+          = max_slice min_slice min_vruntime prev_sum_exec_runtime
+  line 3: + custom_slice exec_start group_node load on_rq rel_deadline sched_delayed sum_exec_runtime
+          - slice vlag vprot vruntime
+          = nr_migrations

@@ -1,0 +1,87 @@
+From 0bc9a8b0570d597808223ff8ed2a3c1f5bcc2e52 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:18:18 +0200
+Subject: [PATCH] ipv4: send IP ID 0 for connected non-TCP atomic datagrams
+
+ip_select_ident_segs() gives every packet from a connected socket an ID
+from the per-socket inet_id, and for non-TCP sockets, which can send
+without the socket lock, that is an atomic_add_return() since commit
+f866fbc842de ("ipv4: fix data-races around inet->inet_id"). For a
+datagram with DF set and skb->ignore_df clear -- an atomic datagram in
+RFC 6864 terms, from a socket using IP_PMTUDISC_DO or IP_PMTUDISC_PROBE
+-- no reassembly uses the ID, and the unconnected path of the same
+function already sends 0.
+
+Send 0 for such datagrams from connected non-TCP sockets as well,
+skipping the atomic. TCP is unchanged. Sockets using the default
+IP_PMTUDISC_WANT are unchanged, because __ip_make_skb() sets
+skb->ignore_df for them.
+
+This changes the IP ID on the wire for connected UDP, SCTP, raw and
+ping sockets that use IP_PMTUDISC_DO/PROBE, from a per-socket counter
+to 0.
+
+Not measured. Build-tested only.
+
+Assisted-by: Claude
+---
+DO NOT SEND. Recommendation: DROP. Kept for the record; see REVIEW.md.
+
+Impact: low -- connected UDP/SCTP/raw/ping sockets that set
+IP_PMTUDISC_DO or IP_PMTUDISC_PROBE and are shared by several sending
+threads; benefit not measured.
+
+Why dropped:
+- Wire-visible (IP ID counter -> 0) for a saving that was never
+  measured. The existing harness section could not reach this code:
+  each process opens its own socket, and the default IP_PMTUDISC_WANT
+  sets skb->ignore_df, so the new branch is never taken.
+- UDP GSO: with a base ID of 0, every GSO send produces IDs 0..n-1 and
+  the next send restarts at 0, so receive-side UDP GRO (inet_gro_flush()
+  accepts only incrementing or fixed IDs) cannot merge across two sends.
+  Today the per-socket counter keeps the sequence continuous.
+- Also reaches SCTP (sctp sets inet_daddr), raw and ping sockets, not
+  only UDP as the original changelog said.
+
+History checked (git log -L on ip_select_ident_segs()):
+- pre-2.6.12: connected DF packets use inet->id "to work around buggy
+  Windows95/2000 VJ compression implementations"; unconnected DF get 0.
+- 703133de331a (2013) "ip: generate unique IP identificator if local
+  fragmentation is allowed": the !skb->ignore_df test.
+- 23f57406b82d (2022) "ipv4: avoid using shared IP generator for
+  connected sockets": all connected packets use the private generator,
+  citing "Off-Path TCP Exploits of the Mixed IPID Assignment".
+- 431280eebed9 (2018), 970a5a3ea86d (2022): TCP RST/ACK/SYNACK sent
+  with ID 0 to close off-path side channels.
+- f866fbc842de (2023) "ipv4: fix data-races around inet->inet_id": the
+  atomic for non-TCP.
+Upstream has moved toward 0 for DF control packets and never chose the
+counter specifically for connected UDP, so this does not reverse a
+recorded decision; it is dropped on cost/benefit, not on history.
+
+ include/net/ip.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/include/net/ip.h b/include/net/ip.h
+index 6f602df72ee6..26dbe7bbf4dc 100644
+--- a/include/net/ip.h
++++ b/include/net/ip.h
+@@ -597,6 +597,13 @@ static inline void ip_select_ident_segs(struct net *net, struct sk_buff *skb,
+ 			sock_owned_by_me(sk);
+ 			val = atomic_read(&inet_sk(sk)->inet_id);
+ 			atomic_set(&inet_sk(sk)->inet_id, val + segs);
++		} else if ((iph->frag_off & htons(IP_DF)) && !skb->ignore_df) {
++			/* Atomic datagram (RFC 6864): no reassembly uses the ID;
++			 * the unconnected case below already sends 0. Avoids
++			 * the atomic on a socket shared by lockless senders.
++			 */
++			iph->id = 0;
++			return;
+ 		} else {
+ 			val = atomic_add_return(segs, &inet_sk(sk)->inet_id);
+ 		}
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
+-- 
+2.53.0
+

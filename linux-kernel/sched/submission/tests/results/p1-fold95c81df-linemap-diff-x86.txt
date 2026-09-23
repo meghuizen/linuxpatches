@@ -1,0 +1,132 @@
+========================================================================
+task_struct: cachelines whose membership changed
+========================================================================
+  line  0 (bytes 0-63):
+      + cpus_ptr
+      - wake_entry
+      = __pad, __state, flags, is_blocked, on_cpu, on_rq, ptrace, saved_state, stack, thread_info, usage
+  line  1 (bytes 64-127):
+      + nr_cpus_allowed
+      = last_wakee, normal_prio, prio, recent_used_cpu, rt_priority, static_prio, wake_cpu, wake_entry, wakee_flip_decay_ts, wakee_flips
+  line 23 (bytes 1472-1535):
+      + rcu_node_entry, rcu_read_unlock_special
+      - cpus_ptr, nr_cpus_allowed
+      = btrace_seq, cpus_mask, max_allowed_capacity, migration_disabled, migration_flags, migration_pending, policy, rcu_read_lock_nesting, user_cpus_ptr
+  line 24 (bytes 1536-1599):
+      + rcu_tasks_exit_cpu, rcu_tasks_exit_list
+      - rcu_read_unlock_special
+      = rcu_blocked_node, rcu_node_entry, rcu_tasks_holdout, rcu_tasks_holdout_list, rcu_tasks_idle_cpu, rcu_tasks_idx, rcu_tasks_nvcsw
+  line 25 (bytes 1600-1663):
+      - rcu_tasks_exit_cpu
+      = rcu_tasks_exit_list, sched_info, trc_reader_nesting, trc_reader_scp
+  line 27 (bytes 1728-1791):
+      + active_mm, exec_state
+      = mm, pushable_dl_tasks, pushable_tasks
+  line 28 (bytes 1792-1855):
+      + restart_block
+      - active_mm, exec_state
+      = atomic_flags, exit_code, exit_signal, exit_state, jobctl, pdeath_signal, personality
+  line 29 (bytes 1856-1919):
+      + real_parent, stack_canary
+      = pid, restart_block, tgid
+  line 30 (bytes 1920-1983):
+      + ptraced
+      - real_parent, stack_canary
+      = children, group_leader, parent, sibling
+  line 31 (bytes 1984-2047):
+      - ptraced
+      = pid_links, ptrace_entry, thread_pid
+  line 32 (bytes 2048-2111):
+      + clear_child_tid, set_child_tid
+      = pid_links, thread_node, vfork_done
+  line 33 (bytes 2112-2175):
+      + nvcsw
+      - clear_child_tid, set_child_tid
+      = gtime, prev_cputime, stime, utime, worker_private
+  line 34 (bytes 2176-2239):
+      - nvcsw, prev_cputime
+      = maj_flt, min_flt, nivcsw, posix_cputimers, start_boottime, start_time
+  line 35 (bytes 2240-2303):
+      + posix_cputimers_work
+      = posix_cputimers
+  line 36 (bytes 2304-2367):
+      + cred, real_cred
+      - posix_cputimers
+      = posix_cputimers_work, ptracer_cred
+  line 37 (bytes 2368-2431):
+      + last_switch_count
+      - cred, real_cred
+      = cached_requested_key, comm, nameidata, sysvsem, sysvshm
+  line 38 (bytes 2432-2495):
+      + nsproxy, signal
+      - last_switch_count, sysvshm
+      = files, fs, io_uring, io_uring_restrict, last_switch_time, real_fs
+  line 39 (bytes 2496-2559):
+      + sas_ss_sp
+      - nsproxy, signal
+      = blocked, pending, real_blocked, saved_sigmask, sighand
+  line 40 (bytes 2560-2623):
+      + syscall_dispatch
+      - pending, sas_ss_sp
+      = audit_context, loginuid, sas_ss_flags, sas_ss_size, seccomp, sessionid, task_works
+  line 41 (bytes 2624-2687):
+      + pi_waiters, wake_q
+      - seccomp
+      = alloc_lock, parent_exec_id, pi_lock, self_exec_id, syscall_dispatch
+  line 42 (bytes 2688-2751):
+      + blocker, irqtrace
+      - wake_q
+      = blocked_donor, blocked_lock, blocked_on, pi_blocked_on, pi_top_task, pi_waiters
+  line 43 (bytes 2752-2815):
+      + hardirq_chain_key, hardirq_threaded
+      - blocker
+      = irqtrace
+  line 44 (bytes 2816-2879):
+      + capture_control, io_context
+      - hardirq_chain_key, hardirq_threaded
+      = bio_list, irq_config, journal_info, plug, reclaim_state, softirq_context, softirqs_enabled
+  line 45 (bytes 2880-2943):
+      - capture_control, io_context
+      = ioac, last_siginfo, ptrace_message
+  line 46 (bytes 2944-3007):
+      + cgroups, cpuset_mem_spread_rotor, mems_allowed_seq
+      = acct_rss_mem1, acct_timexpd, acct_vm_mem1, ioac, mems_allowed, psi_flags
+  line 47 (bytes 3008-3071):
+      - cgroups, cpuset_mem_spread_rotor, mems_allowed_seq
+      = cg_list, futex
+  line 49 (bytes 3136-3199):
+      + cache_work
+      - perf_event_mutex
+      = il_prev, il_weight, ipi_mask, mempolicy, perf_ctx_data, perf_event_list, pref_node_fork
+  line 50 (bytes 3200-3263):
+      + mm_cid
+      - cache_work
+      = pref_llc_queued, preferred_llc, rseq
+  line 51 (bytes 3264-3327):
+      + delays
+      = mm_cid, splice_pipe, task_frag, tlb_ubc
+  line 52 (bytes 3328-3391):
+      + ftrace_sleeptime, ftrace_timestamp
+      - delays, task_frag
+      = curr_ret_depth, curr_ret_stack, default_timer_slack_ns, dirty_paused_when, nr_dirtied, nr_dirtied_pause, ret_stack, timer_slack_ns
+  line 53 (bytes 3392-3455):
+      + kmap_ctrl, rcu, utask
+      - ftrace_sleeptime, ftrace_timestamp
+      = active_memcg, memcg_nr_pages_over_high, objcg, throttle_disk, trace_overrun, trace_recursion, tracing_graph_pause
+  line 54 (bytes 3456-3519):
+      - kmap_ctrl, utask
+      = oom_reaper_list, oom_reaper_timer, pagefault_disabled, rcu, rcu_users
+  line 55 (bytes 3520-3583):
+      + mce_kflags, mce_vaddr
+      - oom_reaper_timer
+      = bpf_ctx, bpf_net_context, bpf_storage, security, stack_refcount, stack_vm_area
+  line 56 (bytes 3584-3647):
+      + l1d_flush_kill, rethooks
+      - mce_kflags, mce_vaddr
+      = kretprobe_instances, mce_addr, mce_count, mce_kill_me
+  line 57 (bytes 3648-3711):
+      + thread
+      - rethooks
+      = l1d_flush_kill, unwind_info
+  (35 of 61 lines changed)
+

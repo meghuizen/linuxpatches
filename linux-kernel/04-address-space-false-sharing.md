@@ -1,5 +1,8 @@
 # Task 4 — Fix false sharing in `struct address_space`: page-cache counters vs `a_ops`
 
+> Status (2026-09-23): removed, not submitted. On its target workload an earlier run showed no
+> difference (10.21M vs 10.18M iops). See [`vfs/submission/REVIEW.md`](vfs/submission/REVIEW.md).
+
 **What the patch does, in one sentence:** it regroups `struct address_space` so the fields *written* on every page-cache add/remove (`i_pages`, `nrpages`, `writeback_index`) sit together on one cache line, and the fields *read* on every fault/read/writeback (`host`, `a_ops`, `gfp_mask`, `flags`) sit together on another — today they are interleaved, so cache mutations on one CPU invalidate the read path on every other CPU using the same file.
 
 | | |
@@ -8,7 +11,7 @@
 | Kernel | Linux 7.2, vanilla, `/mnt/data/linux-src/linux-7.2` |
 | Patch size | Reorder 13 fields, no size change (168 bytes before and after) |
 | Risk | Low |
-| Realistic gain | Two effects: (1) removes read-vs-write false sharing under concurrent access to one file; (2) halves dirty lines per page-cache add/remove (write-combining). Scales with core count and single-file concurrency |
+| Realistic gain | Estimated before measurement, not shown (see status note). Two effects: (1) removes read-vs-write false sharing under concurrent access to one file; (2) halves dirty lines per page-cache add/remove (write-combining). Scales with core count and single-file concurrency |
 | Relation to Task 3 | Same disease, same recipe, one struct over — but weaker (see section 9) |
 
 ---
@@ -256,7 +259,7 @@ What the commit message must contain:
 
 ## 10. Realistic expectation
 
-Two independent effects: the false-sharing fix is conditional (needs multi-CPU, single-file pressure — real for databases and shared-log patterns, absent for many-small-file fleets), while the write-combining of `i_pages`+`nrpages` is small but unconditional. No size change, no call-site churn, same recipe as the already-treated `sock`/`net_device`/`dentry` structs. Rank it behind Task 3 in submission order: land the inode patch first, then present this as "the same treatment for the next struct down the fault path."
+Written before measurement; the measurement in the status note at the top showed no difference. Expected: two independent effects: the false-sharing fix is conditional (needs multi-CPU, single-file pressure — real for databases and shared-log patterns, absent for many-small-file fleets), while the write-combining of `i_pages`+`nrpages` is small but unconditional. No size change, no call-site churn, same recipe as the already-treated `sock`/`net_device`/`dentry` structs. Neither this nor Task 3 is being submitted.
 
 ---
 

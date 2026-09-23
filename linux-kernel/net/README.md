@@ -1,10 +1,48 @@
 # Networking patches — the router forwarding path
 
-Nine patches against **Linux 7.3-rc3**, aimed at a home router: a
-four-core ARM Cortex-A53 at 2 GHz, 1 GB of RAM, forwarding 1–2.5 Gbit/s.
+Nine patches were written against Linux 7.3-rc3 (518e5b794c06), aimed at a
+home router: a four-core ARM Cortex-A53 at 2 GHz, 1 GB of RAM, forwarding
+1–2.5 Gbit/s. Three go upstream, one is pending, five were removed or
+dropped (see Status).
 
 Nothing here is device- or driver-specific. Every patch is in generic
 `net/` code and is equally valid on x86_64.
+
+## Status
+
+Emails for submission are in [`submission/`](submission/), base v7.3-rc3
+(518e5b794c06). Each patch was measured alone in a nested KVM guest (29
+interleaved boots, 2 rounds, 9 baseline boots; see
+[`../SUBMISSION-STATUS.md`](../SUBMISSION-STATUS.md)). Numbers are kernel
+instructions from `perf stat`.
+
+Going upstream, [`submission/nf-next/`](submission/nf-next/), `[PATCH nf-next 0/3]`:
+
+| new | old # | patch | measured result |
+|---|---|---|---|
+| 1/3 | 4 | netfilter: conntrack: hash IPv4 tuples as two words | new flow -155 insns/pkt (16845 -> 16686; below all 21 other boots) |
+| 2/3 | 8 | netfilter: conntrack: keep the unscaled tuple hashes for teardown | flush -597 insns/entry (1908 -> 1311, -31%) |
+| 3/3 | 9 | netfilter: conntrack: warn when nf_conntrack_max outgrows the hash table | 8x buckets silent, 9x warns once, non-init netns refused |
+
+Pending, [`submission/net-next/`](submission/net-next/): old 1, CAKE timer
+slack attribute. Slack 0 (the default) is inert. With a 100 Mbit shaper,
+slack 10/50/100 us cut timer expiries by 76/90/91% and kernel insns/pkt by
+16/40/51-56%. Decision open; see [`../SUBMISSION-STATUS.md`](../SUBMISSION-STATUS.md).
+
+Not sent (reasons in [`submission/REVIEW.md`](submission/REVIEW.md)):
+
+| old # | patch | reason | file |
+|---|---|---|---|
+| 6 | bridge: skip the proxy-ARP path | no measurable difference: ARP flood -0.8% insns/frame, inside the 1.7% base spread (keep rule needed -2%) | [`submission/removed/`](submission/removed/) |
+| 2 | sch_cake: Weyl sequence for the quantum dither | removed: by arithmetic about 0.2-1 get_random_u16() call per packet against ~13 us of CPU per packet, far below anything measurable | [`submission/removed/`](submission/removed/) |
+| 5 | gro: look up the offload before walking the GRO list | removed: saves work only for frames without a GRO offload (ARP, PPPoE session); no workload here reaches that path, not measured | [`submission/removed/`](submission/removed/) |
+| 3 | nf_flow_table: hash only the key head | slower for VLAN/PPPoE flows: 321 -> 353 insns per hash call (plain flows 321 -> 276) | [`submission/dropped/`](submission/dropped/) |
+| 7 | conntrack: size the extension prealloc | extra krealloc per flow in common configurations | none |
+
+The old export in `patches/` is superseded ([`patches/README.md`](patches/README.md)).
+Its versions of patch 1 (CAKE slack: default 0 was not inert) and patch 8
+(`nf_conntrack_hash_check_insert()` did not set `hash_raw`) had bugs that are
+fixed in the submission versions.
 
 ## Why this hardware changes the answer
 
@@ -34,10 +72,13 @@ The second-order effect is that short UDP exchanges never live long
 enough to be offloaded. A DNS query or a QUIC handshake is a flow of two
 packets: it pays the full conntrack setup and teardown, pays the
 flowtable hash and miss on every packet, and then falls through to the
-software path anyway. **The dominant cost of modern router traffic is
-per-flow, not per-packet.** Five of the eight patches attack that.
+software path anyway. The dominant cost of modern router traffic is
+per-flow, not per-packet. Five of the original nine patches addressed that;
+two of them (conntrack hash, teardown hashes) are in the submitted series.
 
-## The patches
+## The original nine patches
+
+Numbering is the original one; see Status for what happened to each.
 
 | # | Subsystem | What it does |
 |---|---|---|
@@ -51,11 +92,13 @@ per-flow, not per-packet.** Five of the eight patches attack that.
 | 8 | `nf_conntrack` | Save the raw tuple hashes at confirm; teardown rescales instead of rehashing |
 | 9 | `nf_conntrack` | Warn when `nf_conntrack_max` is raised past the hash table it does not resize |
 
-Patch 1 is the largest single win and the least interesting technically:
-CAKE arms a timer after nearly every shaped packet with **zero slack**, so
-the hrtimer layer can coalesce nothing and each packet costs an arm, an
-interrupt and a softirq round trip. `sch_fq` has had the same knob for
-years. Default is 0, so existing setups are bit-identical.
+Patch 1: CAKE arms a timer after nearly every shaped packet with zero
+slack, so the hrtimer layer can coalesce nothing and each packet costs an
+arm, an interrupt and a softirq round trip. `sch_fq` has had the same knob
+for years. Default is 0; the measured default is inert. An earlier claim
+that this was "the largest single win" was based on the old version, which
+was not inert at slack 0, and is withdrawn; the measured effect with slack
+set is in Status.
 
 Patches 3 and 4 are the same observation in two subsystems: **the hot
 hashes are computed over keys sized for the general case while the common
@@ -63,7 +106,8 @@ case leaves most of the key zero.** IPv6-sized address unions holding four
 useful bytes; tunnel and encapsulation fields that are zero on a plain
 router. Both fixes keep the hash function and its key, shorten only the
 message, and still compare the full key on a hit — so a collision costs a
-comparison and can never produce a wrong match.
+comparison and can never produce a wrong match. Patch 3 was dropped
+(slower for VLAN/PPPoE flows, see Status); patch 4 is nf-next 1/3.
 
 ## Why patch 8 is safe when sharing hashes generally is not
 
@@ -87,7 +131,8 @@ No UAPI is removed or changed. Patch 1 adds one optional netlink
 attribute; old userspace does not send it and ignores it on dump, and its
 default reproduces today's behaviour exactly. Everything else is internal.
 
-All eight compile on x86_64. Struct offsets quoted in the commit messages
+All nine compiled on x86_64; each submitted commit builds its touched
+objects with W=1 and no warnings. Struct offsets quoted in the commit messages
 were taken from a built object, not from reading the header.
 
 ## Cross-ISA instruction counts
@@ -103,6 +148,12 @@ building a kernel for each. Straight-line instruction counts, padding and
 | conntrack 16 B, 10 SIPROUNDs (patch 4) | 164 | 514 | 128 | 297 | 179 |
 | flowtable 88 B, 7 mixes (today) | 274 | 280 | 184 | 334 | 236 |
 | flowtable 42 B, 3 mixes (patch 3) | 134 | 139 | 94 | 166 | 116 |
+
+The flowtable rows count only the jhash rounds and do not reproduce: GCC
+15.2 does not unroll hashbench.c's "unrolled" jhash, and patch 3's
+`memchr_inv()` predicate is not counted. Measured on the in-kernel code,
+`flow_offload_hash()` goes 321 -> 276 for plain flows and 321 -> 353 with
+one VLAN/PPPoE encap (`submission/REVIEW.md`).
 
 siphash is **2-4**: two rounds per eight-byte block and four at the end.
 39 bytes is four blocks plus a tail, so 14 rounds; 16 bytes is two
@@ -123,9 +174,10 @@ kernel for a RISC-V router wants `CONFIG_RISCV_ISA_ZBB`.
 
 ## What was measured, and what was not
 
-The instruction counts above are real, taken from disassembly. What is
-**not** measured is how they translate into time on the target: no
-profile, no packet rate, no cycle counts.
+The instruction counts above are taken from disassembly. The per-patch
+runtime results (kernel instructions per packet or entry, x86_64, nested
+KVM guest) are in Status. What is not measured is how they translate into
+time on the A53 target: no profile, no packet rate, no cycle counts there.
 
 The gate that would settle them is `perf stat` on the real device under
 real traffic. On the machine this was written on, the guest cannot resolve
@@ -205,14 +257,12 @@ These plausibly matter more than several of the patches above.
   per entry — one cache miss each, since every entry is a different
   `nf_conn`. Past `MIN_CHAINLEN` it stops inserting and drops the packet.
 
-  Measured here, 16 cores forwarding UDP with a new 5-tuple per packet:
+  An earlier version of this note quoted ~964,000 vs ~604,000 new flows/s
+  (max/buckets 1 vs 24). Those numbers are withdrawn: all four rows came
+  from one boot flagged "control moved", and the next boot showed the
+  opposite direction (`submission/REVIEW.md`, nf-next 3/3).
 
-  | max / buckets | avg chain | new flows/s |
-  |---|---|---|
-  | 1 (the default) | 2 | ~964,000 |
-  | 24 | 7.3 | ~604,000 (**−60%**) |
-
-  Patch 9 adds the warning the kernel does not currently emit.
+  Patch 9 (nf-next 3/3) adds the warning the kernel does not currently emit.
 - **Check whether the NIC sets `skb->hash` on ingress.** GRO's bucket
   index and its per-entry fast reject are both `skb_get_hash_raw()`, a
   bare read of that field. If it is zero, every packet lands in bucket 0

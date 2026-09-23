@@ -1,0 +1,56 @@
+From bbdf65dedf4ac244a55c42fefad12edeb50e7270 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:34:00 +0200
+Subject: [RFC PATCH net-next 3/4] net: gro: find the offload before preparing
+ the gro list
+
+dev_gro_receive() calls gro_list_prepare() before it looks up the
+packet_offload for skb->protocol.  gro_list_prepare() compares the skb
+with every skb held in its bucket, up to MAX_GRO_SKBS, and sets
+NAPI_GRO_CB(p)->same_flow on each.  When the protocol has no
+->gro_receive (ARP, PPPoE session frames), the skb goes to 'normal' and
+those results are never read.
+
+Call gro_list_prepare() once the offload has been found.  same_flow on
+the held skbs is read only by the ->gro_receive callbacks, and the next
+gro_list_prepare() rewrites it.  For protocols with an offload the work
+is the same, in a different order.
+
+Not measured.  The saving is one walk of the bucket's held skbs per
+packet without an offload, and nothing when the bucket is empty.
+
+Tested: gro.o builds without warnings (W=1) on x86_64.
+
+Assisted-by: Claude
+---
+Impact: low -- GRO receive of protocols without a GRO offload (ARP,
+PPPoE session) while the bucket holds packets.  Not measured.
+
+ net/core/gro.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/net/core/gro.c b/net/core/gro.c
+index 29b4d02bf519..6dbb7adf77d0 100644
+--- a/net/core/gro.c
++++ b/net/core/gro.c
+@@ -488,8 +488,6 @@ static enum gro_result dev_gro_receive(struct gro_node *gro,
+ 	if (netif_elide_gro(skb->dev))
+ 		goto normal;
+ 
+-	gro_list_prepare(&gro_list->list, skb);
+-
+ 	rcu_read_lock();
+ 	list_for_each_entry_rcu(ptype, head, list) {
+ 		if (ptype->type == type && ptype->callbacks.gro_receive)
+@@ -499,6 +497,8 @@ static enum gro_result dev_gro_receive(struct gro_node *gro,
+ 	goto normal;
+ 
+ found_ptype:
++	gro_list_prepare(&gro_list->list, skb);
++
+ 	skb_set_network_header(skb, skb_gro_offset(skb));
+ 	skb_reset_mac_len(skb);
+ 	BUILD_BUG_ON(sizeof_field(struct napi_gro_cb, zeroed) != sizeof(u32));
+-- 
+2.53.0
+

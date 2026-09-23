@@ -1,0 +1,105 @@
+# Submission status (2026-09-23, 21:00 CEST)
+
+One place for the state of every patch. Details per area are in
+`<area>/submission/REVIEW.md`; the emails are the `.patch` files listed
+below. Nothing here is committed or sent yet.
+
+## Rules applied (from the submitter)
+
+- Each patch must improve the kernel on its own; no regression, not even
+  temporary. Fixable patches are fixed; buggy or regressing patches are
+  removed; patches with no measurable difference are removed.
+- Emails: short, factual, no rhetoric; what / why / evidence / test
+  results (short form of the measured analysis); impact high/medium/low
+  and where; Assisted-by trailer; "generated with assistance of Claude"
+  notice in the cover letter; anonymous GitHub noreply author
+  (`Michiel <367462+meghuizen@users.noreply.github.com>`).
+- Before sending: the submitter must add Signed-off-by with a real name
+  and reachable address (kernel rules do not accept anonymous DCO).
+
+## How it was measured
+
+patchtest campaign: each patch alone on v7.3-rc3 (518e5b794c06), booted
+in a nested KVM guest (16 vCPUs, laptop Ryzen 9 8940HX, KVM in Hyper-V),
+29 interleaved boots, 2 rounds, 9 baseline boots. Results:
+`/usr/src/kbench/results/patchtest-*` (UTC 20260923-1427 .. -1820), full
+report copy: `submission-campaign-report-brief.txt` (next to this file).
+Instruction counts are reliable; cycles/rates only between adjacent boots.
+
+## Decisions
+
+| area | patch | result | decision | email |
+|---|---|---|---|---|
+| vfs | selftests: build openat2 tests | builds and passes every boot | KEEP 1/3 | vfs/submission/0001 |
+| vfs | fs: hand the walk's dentry ref to the file | 16 procs one file: -38% kernel cycles/open (6741, 7934 vs 11326-13011); single-process open unchanged | KEEP 2/3 | vfs/submission/0002 |
+| vfs | fs: allocate struct file only when needed (V2b) | ENOENT -22% (ext4) / -13% (tmpfs) kernel insns/open; successful open inside base range | KEEP 3/3 | vfs/submission/0003 |
+| vfs | lockref: single addition | +-1.3%, inside spread | REMOVED (no measurable difference) | vfs/submission/removed/ |
+| nf | 1 hash IPv4 as two words | new flow -155 insns/pkt (below all 21 other boots) | KEEP | net/submission/nf-next/0001 |
+| nf | 2 keep unscaled hashes for teardown | flush -597 insns/entry (-31%) | KEEP | nf-next/0002 |
+| nf | 3 warn when max > 8x buckets | 8x silent, 9x warns once, netns refused | KEEP | nf-next/0003 |
+| net | bridge ARP proxy early return | -0.8%, inside spread (rule needed -2%) | REMOVED | net/submission/removed/ |
+| net | CAKE timer slack attribute | see "Open" | PENDING | net/submission/net-next/0001 |
+| client | udp: one wakeup per drained batch | epoll callbacks/dgram 1.00 -> 0.87-0.91 (6 senders), 0.45-0.47 (12); fixed-rate test: no extra drops at equal load (30 vs 61k of 13.5M) | KEEP, now [PATCH net-next] | client/submission/netdev/0001 |
+| client | eventpoll field layout | inside spread | REMOVED | client/submission/removed/ |
+| sched | EEVDF sched_entity reorder | no difference (512-task L1 +22% was one outlier boot) | REMOVED, no sched series | sched/submission/removed/ |
+
+Series labels now: vfs `[RFC PATCH 0/3]` (RFC because the dentry patch
+overlaps Mateusz Guzik's posted work), nf `[PATCH nf-next 0/3]`, udp
+`[PATCH net-next 0/1]`, CAKE pending.
+
+## Open
+
+1. CAKE timer slack. Facts so far:
+   - slack 0 (default) is inert: same timer expiries/insns as baseline.
+   - 100 Mbit shaper: slack 10/50/100 us cut timer expiries 76/90/91%
+     and kernel insns/pkt 16/40/51-56%; achieved rate rises toward
+     100 Mbit (32-69 at slack 0 on this host, 85-97 with slack), never
+     above 100. Ping loss 0% at every slack.
+   - Diagnostics (no perf, unpaced): at slack 0 there is ~1 timer
+     interrupt per packet (~68k/s) which starves the sender on this
+     nested-VM host; with slack the sender floods ~7x the rate and CAKE
+     drops the excess at its 5 MB memory limit. Shaper holds 100 Mbit in
+     all cases; nothing lost before CAKE. Drops/delay differences seen
+     earlier are from different offered load, not slack.
+   - Fable 5.1 review done (scratchpad/cake-analysis/ANALYSIS.md): patch
+     correct and inert at slack 0; configured rate stays an upper bound
+     (cake_advance_shaper advances from the previous time); drops at
+     100 us are overload drops, not slack. Needs: a bound (reject slack >
+     target/2, proposed-fix.diff) and a rewritten changelog (5.5); the
+     -16..-56% insn saving is nested-virt inflated, use expiries/pkt
+     0.55 -> 0.12/0.06/0.05 as the robust number.
+   - Running: paced rerun (1 ms-tick pacing) 4 boots; then T5 (insns per
+     timer wakeup without CAKE) and T4 (bound/netlink tests).
+   - Then: decide KEEP/fix/REMOVE, update the email (currently says
+     untested), net-next cover letter (bridge removed -> CAKE alone, no
+     cover needed for 1 patch).
+2. Final branches, built with `git am` from the exported emails (so the
+   commit messages are exactly what is sent; below-`---` notes stay out
+   of git), each commit W=1-builds its touched objects with no warnings,
+   code identical to the old branches minus the removed patches:
+   sub-vfs-final (in /usr/src/sub-vfs, 3 commits, tip e63e351fd002),
+   sub-nf-final (in /usr/src/sub-net, 3 commits, tip 0689b0b51400),
+   sub-udp-final (in /usr/src/sub-client, 1 commit, f13187b9a0f8).
+   Old branches (sub-vfs, sub-net, sub-client) kept unchanged. CAKE not
+   yet (pending).
+3. Repo documentation updated in the working tree (not committed): old
+   <area>/patches/ exports deleted (they contained the CAKE slack,
+   conntrack hash_raw and UDP nb=0 bugs) and replaced by a README pointing
+   to submission/; root README, area READMEs and docs 01-04 carry status
+   notes with the measured outcome; withdrawn claims marked. Links checked,
+   privacy grep clean. The new links point to untracked files
+   (submission/, this file), so all of it must be committed together.
+   Commit/push only when the submitter asks.
+4. Harness notes: lockref call counting is dead (lockref_* have no
+   __fentry__, use kprobes); context-switches CPU-wide probe can read 0
+   on an idle CPU; staged harness edits live in scratchpad/stage/.
+
+## Key paths
+
+- Scratchpad: /tmp/claude-0/-usr-src-linuxpatches/9691c9a3-b70d-4804-a7be-7a4acdddcb51/scratchpad
+  (campaign-report*.txt, stage/, cake-analysis/, follow-up scripts *-after.sh)
+- Harness: /usr/src/kbench/scripts/guest/patchtest.sh (+ patchtest-src/),
+  report: /usr/src/kbench/scripts/patchtest-report.py
+- Per-patch test worktrees: /usr/src/linux-pt-{dentry,lockref,lazyalloc,
+  eevdf,nf,cake,bridge,udp,epoll,all}
+- Submission branches/worktrees: /usr/src/sub-{vfs,net,client,sched}

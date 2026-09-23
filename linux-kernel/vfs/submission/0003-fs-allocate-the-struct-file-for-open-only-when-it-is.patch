@@ -1,0 +1,221 @@
+From 83c2a4dd679f2300eed812f12dfecf3ac4d5f660 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 16:03:02 +0200
+Subject: [RFC PATCH 3/3] fs: allocate the struct file for open() only when it
+ is needed
+
+path_openat() calls alloc_empty_file() before the path walk and
+fput_close()s the file again when the open fails. Opens of a missing
+name (ENOENT), and those failing with ENOTDIR, ELOOP or ENAMETOOLONG in
+the walk, never use the file, yet each pays for the slab allocation,
+security_file_alloc() and security_file_free(), a get_cred()/put_cred()
+pair on the opener's cred->usage and two updates of the nr_files percpu
+counter. An -ECHILD or -ESTALE retry pays again.
+
+Allocate the file after the walk instead: in open_last_lookups() before
+lookup_open() when O_CREAT is set or the directory has ->atomic_open(),
+otherwise in path_openat() once the walk has succeeded, just before
+do_open(). do_open() itself is unchanged and always gets a file.
+O_TMPFILE and O_PATH opens still allocate up front.
+
+Static analysis (x86-64, gcc 15.2, fs/namei.o, one branch decision per
+conditional, no audit context), instructions executed inside
+path_openat() with open_last_lookups() and do_open() inlined:
+
+  path                                       before  after
+  O_RDONLY open of a cached regular file        163    163
+  ENOENT from a cached negative dentry          103     95
+  ENOENT on tmpfs (no negative dentry kept)     105    103
+  O_CREAT of a new name (no cached dentry)      151    155
+
+On the two ENOENT paths alloc_empty_file() and fput_close() are no
+longer called. Those calls execute about 120 instructions in
+alloc_empty_file(), init_file(), fput_close() and __fput_deferred(),
+plus kmem_cache_alloc/free, security_file_alloc/free,
+mutex_init_generic() and two percpu_counter_add_batch() calls, with
+three locked atomics among them (two on cred->usage, one on f_ref).
+
+Generated code: path_openat() grows from 575 to 630 instructions
+(2507 -> 2693 bytes), lookup_open() shrinks from 496 to 470, and
+fs/namei.o .text grows by 48 bytes. Allocating before do_open(), rather
+than letting do_open() take a NULL file, keeps gcc from duplicating the
+body of do_open() for the file == NULL case.
+
+Visible change: at the file-max limit, an open that fails in the walk
+now returns the walk's error instead of ENFILE. An open that would
+succeed still gets ENFILE, before anything is created or truncated.
+
+Runtime, x86-64 guest (nested KVM), this patch alone on the base
+commit, 2 boots interleaved with 8 base boots; kernel instructions per
+open() in a single-process loop (perf stat instructions:k):
+
+  test                            base median (range)    patched
+  ENOENT, ext4 negative dentry    5430 (5377-5617)       4241, 4201
+  ENOENT, tmpfs                   8952 (8901-9732)       7790, 7819
+  O_RDONLY open+close, ext4       7140 (7006-7296)       7216, 7258
+  O_RDONLY open+close, tmpfs      6879 (6857-7139)       6924, 7040
+
+A failed open executes about 1200 fewer kernel instructions (-22% on
+ext4, -13% on tmpfs); with 16 threads failing opens in one directory
+the saving is -25%.  The successful open is inside the base range.  The
+openat2 selftests and an error-path test (O_CREAT|O_TRUNC, O_DIRECT
+failing after the open, EACCES from may_open(), ENOTDIR, then umount of
+both filesystems to catch a leaked reference) pass on both boots, with
+no kernel warnings.
+
+Tested by compiling fs/namei.o with W=1 and by the runtime run above.
+
+Assisted-by: Claude
+---
+Impact: medium -- opens that fail during the path walk (ENOENT from
+compilers, loaders and interpreters probing search paths; ENOTDIR,
+ELOOP, ENAMETOOLONG; -ECHILD/-ESTALE retries).  The successful open path
+executes the same number of instructions as before (163).  O_CREAT of a
+new name executes 4 more (151 -> 155), out of several thousand for a
+create.
+
+Which failures skip the allocation: every failure in the walk, for opens
+without O_CREAT on directories without ->atomic_open().  Failures inside
+do_open() (EACCES from may_open(), EISDIR, EEXIST for O_CREAT|O_EXCL,
+EROFS) still allocate, as before.  O_TMPFILE and O_PATH allocate up
+front as before.
+
+The path_openat() table comes from source-annotated disassembly of the
+fs/namei.o that produced the tested kernel, with every conditional
+branch decided by hand for each path.  The runtime table is measured.
+Not tested: the file-max limit, network filesystems and ->atomic_open()
+users, the cost of O_CREAT at runtime.
+
+ fs/namei.c | 62 +++++++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 47 insertions(+), 15 deletions(-)
+
+diff --git a/fs/namei.c b/fs/namei.c
+index 4219484ed328..cf50c37ce2f6 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -4426,6 +4426,9 @@ static struct dentry *atomic_open(const struct path *path, struct dentry *dentry
+  * only lookup and creation were performed and the caller has to open it.  In
+  * the latter case the dentry may be negative if O_CREAT hadn't been specified.
+  *
++ * @file may be NULL if O_CREAT is not set and the directory has no
++ * ->atomic_open(): a plain lookup does not use it.
++ *
+  * Returns ERR_PTR() on failure.
+  */
+ static struct dentry *lookup_open(struct nameidata *nd, struct file *file,
+@@ -4464,7 +4467,8 @@ static struct dentry *lookup_open(struct nameidata *nd, struct file *file,
+ 		goto out;
+ 	}
+ 
+-	file->f_mode &= ~FMODE_CREATED;
++	if (file)
++		file->f_mode &= ~FMODE_CREATED;
+ 	dentry = d_lookup(dir, &nd->last);
+ 	for (;;) {
+ 		if (!dentry) {
+@@ -4568,7 +4572,7 @@ static struct dentry *lookup_open(struct nameidata *nd, struct file *file,
+ 	if (error)
+ 		goto out_dput;
+ out:
+-	if (!IS_ERR(dentry)) {
++	if (file && !IS_ERR(dentry)) {
+ 		if (file->f_mode & FMODE_CREATED)
+ 			fsnotify_create(dir_inode, dentry);
+ 		if (file->f_mode & FMODE_OPENED)
+@@ -4732,9 +4736,10 @@ static struct dentry *lookup_fast_for_open(struct nameidata *nd, int open_flag)
+ }
+ 
+ static const char *open_last_lookups(struct nameidata *nd,
+-		   struct file *file, const struct open_flags *op)
++		   struct file **filep, const struct open_flags *op)
+ {
+ 	int open_flag = op->open_flag;
++	struct file *file = *filep;
+ 	struct dentry *dentry;
+ 	const char *res;
+ 
+@@ -4764,11 +4769,24 @@ static const char *open_last_lookups(struct nameidata *nd,
+ 		}
+ 	}
+ 
++	/*
++	 * Only a create or ->atomic_open() needs the file here; allocate it
++	 * before lookup_open() takes the directory lock. A plain lookup
++	 * leaves it to do_open(), so that a miss does not allocate one.
++	 */
++	if (!file && ((open_flag & O_CREAT) ||
++		      nd->path.dentry->d_inode->i_op->atomic_open)) {
++		file = alloc_empty_file(open_flag, current_cred());
++		if (IS_ERR(file))
++			return ERR_CAST(file);
++		*filep = file;
++	}
++
+ 	dentry = lookup_open(nd, file, op);
+ 	if (IS_ERR(dentry))
+ 		return ERR_CAST(dentry);
+ 
+-	if (file->f_mode & (FMODE_OPENED | FMODE_CREATED)) {
++	if (file && (file->f_mode & (FMODE_OPENED | FMODE_CREATED))) {
+ 		dput(nd->path.dentry);
+ 		nd->path.dentry = dentry;
+ 		return NULL;
+@@ -4988,22 +5006,35 @@ static int do_o_path(struct nameidata *nd, unsigned flags, struct file *file)
+ static struct file *path_openat(struct nameidata *nd,
+ 			const struct open_flags *op, unsigned flags)
+ {
+-	struct file *file;
++	struct file *file = NULL;
+ 	int error;
+ 
+-	file = alloc_empty_file(op->open_flag, current_cred());
+-	if (IS_ERR(file))
+-		return file;
+-
+-	if (unlikely(file->f_flags & __O_TMPFILE)) {
+-		error = do_tmpfile(nd, flags, op, file);
+-	} else if (unlikely(file->f_flags & O_PATH)) {
+-		error = do_o_path(nd, flags, file);
++	if (unlikely(op->open_flag & (__O_TMPFILE | O_PATH))) {
++		file = alloc_empty_file(op->open_flag, current_cred());
++		if (IS_ERR(file))
++			return file;
++		if (op->open_flag & __O_TMPFILE)
++			error = do_tmpfile(nd, flags, op, file);
++		else
++			error = do_o_path(nd, flags, file);
+ 	} else {
++		/*
++		 * The walk does not need the file. open_last_lookups()
++		 * allocates it when lookup_open() needs it (O_CREAT or
++		 * ->atomic_open()); otherwise it is allocated below, once the
++		 * walk has succeeded, so that a miss does not pay for it.
++		 */
+ 		const char *s = path_init(nd, flags);
+ 		while (!(error = link_path_walk(s, nd)) &&
+-		       (s = open_last_lookups(nd, file, op)) != NULL)
++		       (s = open_last_lookups(nd, &file, op)) != NULL)
+ 			;
++		if (!error && !file) {
++			file = alloc_empty_file(op->open_flag, current_cred());
++			if (IS_ERR(file)) {
++				error = PTR_ERR(file);
++				file = NULL;
++			}
++		}
+ 		if (!error)
+ 			error = do_open(nd, file, op);
+ 		terminate_walk(nd);
+@@ -5014,7 +5045,8 @@ static struct file *path_openat(struct nameidata *nd,
+ 		WARN_ON(1);
+ 		error = -EINVAL;
+ 	}
+-	fput_close(file);
++	if (file)
++		fput_close(file);
+ 	if (error == -EOPENSTALE) {
+ 		if (flags & LOOKUP_RCU)
+ 			error = -ECHILD;
+-- 
+2.53.0
+

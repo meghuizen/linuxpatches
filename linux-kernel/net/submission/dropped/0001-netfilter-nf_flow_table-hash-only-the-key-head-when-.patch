@@ -1,0 +1,86 @@
+From 465ee9fc25d92cadabb83c0717cec666f188ab32 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:27:58 +0200
+Subject: [RFC PATCH nf-next] netfilter: nf_flow_table: hash only the key head
+ when encap and tun are zero
+
+flow_offload_hash() and flow_offload_hash_obj() jhash the 88-byte key up
+to __hash.  The last 46 bytes, encap[] and tun, are zero for a flow that
+is neither encapsulated nor tunnelled.
+
+Hash only the first 42 bytes when the tail is zero.  Equal keys take the
+same branch, and flow_offload_hash_cmp() still compares the full key.
+
+Instructions per flow_offload_hash() call, built from this tree and
+counted with perf stat in a userspace loop (x86_64, 20M calls, including
+11 instructions of loop overhead):
+
+                        before   after
+  encap/tun zero          321     276
+  one VLAN/PPPoE encap    321     353
+
+Assisted-by: Claude perf
+---
+DROPPED -- do not send.  Kept for reference only.
+
+The saving is smaller than first claimed, and encapsulated flows get
+slower because they pay for the memchr_inv() predicate as well.  Measured on the in-kernel code (x86_64, perf, instructions per
+call): 321 -> 276 for a flow with encap[]/tun zero, but 321 -> 353 for
+a flow with one VLAN or PPPoE encap.  PPPoE and VLAN flows are common
+on the routers the flowtable targets, so this makes a common case
+slower.  The earlier changelog figure of 274 -> 134 left out the
+predicate.
+
+ net/netfilter/nf_flow_table_core.c | 24 ++++++++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/net/netfilter/nf_flow_table_core.c b/net/netfilter/nf_flow_table_core.c
+index 934c6151f558..40008049d164 100644
+--- a/net/netfilter/nf_flow_table_core.c
++++ b/net/netfilter/nf_flow_table_core.c
+@@ -279,18 +279,38 @@ void flow_offload_free(struct flow_offload *flow)
+ }
+ EXPORT_SYMBOL_GPL(flow_offload_free);
+ 
++/* encap[] and tun are zero unless the flow is encapsulated or tunnelled;
++ * hash only the head of the key then.  Equal keys still take the same
++ * branch, and flow_offload_hash_cmp() compares the whole key.
++ * encap_num and tun_num are not part of the key, so they cannot be used
++ * to decide the length.
++ */
++#define FLOW_OFFLOAD_KEY_HEAD	offsetof(struct flow_offload_tuple, encap)
++#define FLOW_OFFLOAD_KEY_FULL	offsetof(struct flow_offload_tuple, __hash)
++
++static u32 flow_offload_key_len(const struct flow_offload_tuple *tuple)
++{
++	const void *tail = (const char *)tuple + FLOW_OFFLOAD_KEY_HEAD;
++
++	if (memchr_inv(tail, 0, FLOW_OFFLOAD_KEY_FULL - FLOW_OFFLOAD_KEY_HEAD))
++		return FLOW_OFFLOAD_KEY_FULL;
++
++	return FLOW_OFFLOAD_KEY_HEAD;
++}
++
+ static u32 flow_offload_hash(const void *data, u32 len, u32 seed)
+ {
+ 	const struct flow_offload_tuple *tuple = data;
+ 
+-	return jhash(tuple, offsetof(struct flow_offload_tuple, __hash), seed);
++	return jhash(tuple, flow_offload_key_len(tuple), seed);
+ }
+ 
+ static u32 flow_offload_hash_obj(const void *data, u32 len, u32 seed)
+ {
+ 	const struct flow_offload_tuple_rhash *tuplehash = data;
+ 
+-	return jhash(&tuplehash->tuple, offsetof(struct flow_offload_tuple, __hash), seed);
++	return jhash(&tuplehash->tuple, flow_offload_key_len(&tuplehash->tuple),
++		     seed);
+ }
+ 
+ static int flow_offload_hash_cmp(struct rhashtable_compare_arg *arg,
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
+-- 
+2.53.0
+

@@ -1,0 +1,51 @@
+From ba26f60d9628a75c842935cba987b365f97bd6fb Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:26:51 +0200
+Subject: [PATCH] btrfs: let stat() run ->getattr in rcu-walk
+
+Set IOP_GETATTR_RCU where btrfs already sets IOP_FASTPERM_MAY_EXEC on
+inodes it reads from disk (btrfs_iget_path()) and inodes it creates
+(btrfs_create_common()).
+
+btrfs_getattr() serves every btrfs inode type and reads btrfs_inode
+fields - flags, ro_flags, otime, the root's anon_dev and id - calls
+generic_fillattr(), and takes BTRFS_I(inode)->lock, a spinlock, to
+read the delalloc and inode byte counts consistently. No sleeping, no
+references, no side effects, so it qualifies as it is.
+
+Under rcu-walk the inode may be mid-eviction. The root pointer stays
+valid for that: btrfs_free_inode(), which drops the root reference,
+runs from ->free_inode after the RCU grace period, and the spinlock
+lives in the btrfs_inode itself.
+
+The read-only directory inodes that new_simple_dir() builds for
+subvolume roots are not flagged and keep stat'ing with references; they
+have no ->getattr of their own and are not on any hot path.
+---
+ fs/btrfs/inode.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/fs/btrfs/inode.c b/fs/btrfs/inode.c
+index 558b4a3f9633..8b1c06c384f2 100644
+--- a/fs/btrfs/inode.c
++++ b/fs/btrfs/inode.c
+@@ -6023,6 +6023,8 @@ struct btrfs_inode *btrfs_iget(u64 ino, struct btrfs_root *root)
+ 
+ 	if (S_ISDIR(inode->vfs_inode.i_mode))
+ 		inode->vfs_inode.i_opflags |= IOP_FASTPERM_MAY_EXEC;
++	/* btrfs_getattr() only reads the inode, see the flag's definition */
++	inode->vfs_inode.i_opflags |= IOP_GETATTR_RCU;
+ 	unlock_new_inode(&inode->vfs_inode);
+ 	return inode;
+ }
+@@ -7010,6 +7012,7 @@ static int btrfs_create_common(struct inode *dir, struct dentry *dentry,
+ 	if (!ret) {
+ 		if (S_ISDIR(inode->i_mode))
+ 			inode->i_opflags |= IOP_FASTPERM_MAY_EXEC;
++		inode->i_opflags |= IOP_GETATTR_RCU;
+ 		d_instantiate_new(dentry, inode);
+ 	}
+ 
+-- 
+2.53.0
+

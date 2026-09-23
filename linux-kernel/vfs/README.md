@@ -20,6 +20,36 @@ are reproducible against that build alone:
 `inode`, `dentry` and `file` on its own and every layout statement below
 becomes a statement about a random permutation.
 
+## Status
+
+Series for submission: [`submission/`](submission/), `[RFC PATCH 0/3]`, base
+v7.3-rc3 (518e5b794c06). RFC because patch 2 overlaps Mateusz Guzik's posted
+work. Each patch was measured alone in a nested KVM guest (29 interleaved
+boots, 2 rounds, 9 baseline boots; see
+[`../SUBMISSION-STATUS.md`](../SUBMISSION-STATUS.md)).
+
+| # | patch | measured result |
+|---|---|---|
+| 1/3 | selftests: build and run the openat2 tests again | builds and passes every boot |
+| 2/3 | fs: hand the path walk's dentry reference to the opened file | 16 processes opening one file: -38% kernel cycles/open (6741, 7934 vs base 11326-13011); single-process open unchanged |
+| 3/3 | fs: allocate the struct file for open() only when it is needed | failed open (ENOENT): -22% kernel instructions/open on ext4, -13% on tmpfs; successful open inside the base range |
+
+Removed (in [`submission/removed/`](submission/removed/), reasons in
+[`submission/REVIEW.md`](submission/REVIEW.md)):
+
+| old # | patch | reason |
+|---|---|---|
+| 11 | lockref: adjust the count with a single addition | no measurable difference: open/stat instructions within +-1.3%, inside the 2-4% spread |
+| 3-8 | rcu-walk statx (lsm, selinux, fs, ext4, btrfs, xfs) | bug: NULL dereference race under `rcu_read_lock()`; also skips `security_inode_getattr()` |
+| 9 | embed the LSM per-file blob in the struct file allocation | regression: +40 bytes per open file with AppArmor/Landlock (filp 192 -> 256) |
+| 12 | move `i_fop` and `i_flctx` off the refcount cacheline | regression that cannot be fixed: one more line on stat and open at some inode offsets |
+| 13 | place `inode->i_data` on a cacheline boundary | premise false: `struct inode` is not cacheline aligned |
+| 14 | regroup `struct address_space` | no difference on its target workload (10.21M vs 10.18M iops) |
+
+The module-pin patch (15 in the original count) was withdrawn earlier; see
+`05-proposal.md` §2.1. The old export in `patches/` is superseded
+([`patches/README.md`](patches/README.md)).
+
 ## Why static first
 
 The measurement rig for this work is a KVM guest on a WSL2 laptop, and it has
@@ -47,8 +77,9 @@ survives steps 1-3 is worth building.
 
 | file | what it is |
 |---|---|
-| `05-proposal.md` | **the series**: the ledger of shared writes before/after, the three mechanisms found by re-reading the code, what was left alone and why, validation plan |
-| `patches/` | the 15 patches, `git format-patch` output from `/usr/src/linux-vfs` branch `vfs-series` |
+| `05-proposal.md` | the original 15-patch proposal (superseded by `submission/`, see Status): the ledger of shared writes before/after, the three mechanisms found by re-reading the code, what was left alone and why, validation plan |
+| `submission/` | the 3 patches for submission, `REVIEW.md` (per-patch review and runtime results), tests |
+| `patches/` | old export, superseded; only a note remains |
 | `03-vfs-structure.md` | the whole layer: object model, leverage, per-syscall cost, cascades, reuse — **start here** |
 | `04-hypotheses.md` | what we believe and what would show it false — the live list |
 | `40-abi-and-wordsize.md` | 32-bit / 64-bit / UAPI compatibility, and the 12-item checklist |
@@ -96,7 +127,7 @@ Two details that cost a rewrite each, kept here so they are not rediscovered:
   puts a fictional hub in the middle of the graph; they are counted as
   indirect dispatches instead.
 
-## Status
+## Analysis checklist
 
 - [x] baseline updated and all kbench worktrees rebased onto it
 - [x] static graph extracted (2503 functions)
@@ -119,12 +150,12 @@ Two details that cost a rewrite each, kept here so they are not rediscovered:
 - [ ] run it: `kbench build` + boot, baseline vs dopen
 - [ ] a `relatime` mount in the rig — the guest root is `noatime`
       (`mkrootfs.sh:48`) so nothing measured has ever included `touch_atime`
-- [ ] one-line selftest fix to send upstream, see below
-- [x] proposal — `05-proposal.md`, 14 patches in `patches/`, all compiled, full build of the series
+- [x] one-line selftest fix to send upstream, see below (now `submission/` 1/3)
+- [x] proposal — `05-proposal.md`, 14 patches (old export, since superseded by the 3 in `submission/`), all compiled, full build of the series
 - [x] Lean models for the two new mechanisms (`LazyAlloc`, `RcuStat`), 14 theorems
 - [x] `scripts/guest/vfs-verify.sh` — exact hit counts for the predictions in `05-proposal.md` §8 (`KB_EXTRA=kbench.vfsverify=1`)
 - [ ] run vfs-verify on `vfs` and `baseline` and record the two columns
-- [ ] 32-bit size check of patches 13–15 per `40-abi-and-wordsize.md` §5.3
+- [ ] 32-bit size check of patches 13–15 per `40-abi-and-wordsize.md` §5.3 (moot: those patches were removed)
 
 ## An upstream bug found on the way
 
@@ -142,4 +173,4 @@ that a default kselftest run silently does not build or execute.
 
 That is the suite which would validate the path-walk work in this directory.
 Fixing it is a one-line change and should go upstream on its own, ahead of
-anything else here.
+anything else here. It is patch 1/3 in [`submission/`](submission/).

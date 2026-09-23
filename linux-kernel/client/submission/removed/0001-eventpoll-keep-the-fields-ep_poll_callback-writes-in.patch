@@ -1,0 +1,160 @@
+From d110c676df57449da226431d364cf36c578b0dee Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:17:37 +0200
+To: Christian Brauner <brauner@kernel.org>,
+    Alexander Viro <viro@zeniv.linux.org.uk>
+Cc: Jan Kara <jack@suse.cz>, linux-fsdevel@vger.kernel.org,
+    linux-kernel@vger.kernel.org
+Subject: [RFC PATCH] eventpoll: keep the fields ep_poll_callback() writes in
+ one cacheline
+
+ep_poll_callback() runs for every wakeup of a watched file, in the
+context that made the file ready. It takes ep->lock, links the epitem
+on ep->rdllist (ep->ovflist during a scan) and, if a task is waiting in
+epoll_wait(), takes ep->wq.lock to wake it. In the current layout ->wq
+is in the first cacheline of struct eventpoll and ->rdllist, ->lock,
+->seq and ->ovflist are in the second, so a callback that wakes a
+waiter dirties two cachelines, and so does every epoll_wait().
+
+Move ->lock, ->seq, ->rdllist, ->ovflist and ->wq to the start of the
+struct. No functional change; the size stays 200 bytes.
+
+Cachelines of struct eventpoll touched, before -> after, from pahole on
+x86_64 with CONFIG_NET_RX_BUSY_POLL=y (the object comes from
+kmalloc-256, so it is cacheline aligned):
+
+                                    read             written
+  ep_poll_callback()           0,1,2,3 -> 0,1,2,3   0,1 -> 0
+  ep_poll() + ep_send_events() 0,1,2,3 -> 0,1,2,3   0,1 -> 0
+
+The number of lines read does not change on either path: the callback
+still reads ->poll_wait.head (waitqueue_active(); line 0 before, line 1
+after) and ->busy_poll_usecs/->prefer_busy_poll (lines 2 and 3, not
+moved); epoll_wait() still reads ->ws (line 1) and the busy-poll fields.
+->mtx.owner stays in line 0 (offset 0 before, 56 after); the rest of
+->mtx, used only by the mutex slow path, moves to line 1.
+
+No runtime measurement shows a difference; the layout was checked with
+pahole on the built fs/eventpoll.o before and after.
+
+Generated code, built kernel (x86_64): struct eventpoll stays 200
+bytes; lock, rdllist and ovflist move from line 1 to line 0, next to wq,
+so the lines ep_poll_callback() writes go from two to one.
+ep_poll_callback() compiles to the same 181 instructions and
+do_epoll_wait() goes from 339 to 333.
+
+Assisted-by: Claude pahole
+---
+Impact: low -- epoll sets whose files become ready while a task waits
+in epoll_wait() on another CPU; the benefit is not demonstrated.
+
+RFC: static analysis only. Offsets from pahole on fs/eventpoll.o
+(x86_64, CONFIG_NET_RX_BUSY_POLL=y, no lock debugging):
+
+  before                              after
+  0  mtx          (owner at 0)        0  lock, seq
+  24 wq                               8  rdllist
+  48 poll_wait    (head at 56)        24 ovflist
+  72 rdllist      -- line 1 --        32 wq
+  88 lock, seq                        56 mtx          (owner at 56)
+  96 rbr                              80 poll_wait    -- line 1 --
+  112 ovflist                         104 rbr
+  120 ws                              120 ws
+  128.. unchanged (napi_id 184, busy_poll_usecs 188, prefer_busy_poll 194)
+
+Uncontended single-threaded epoll_wait(): no additional cacheline is
+read (4 before, 4 after); the lines written drop from 2 to 1. A
+perf-counter test for this case (eventfd write + epoll_wait + read in
+one pinned thread) is prepared but has not been run on a patched
+kernel.
+
+No write-hot field moves next to a field it did not already share a
+line with on the paths above: ->mtx.owner was in line 0 with ->wq
+before and is in line 0 with ->wq, ->lock, ->rdllist and ->ovflist
+after; those are all taken by the epoll_wait() path anyway. The mutex
+slow-path fields move to line 1 with ->poll_wait, ->rbr and ->ws;
+->rbr and ->ws are used under that mutex.
+
+With lock debugging (spinlock_t larger than 4 bytes) the fields no
+longer fit in one line; nothing depends on that.
+
+Not tested: no runtime test on a patched kernel; the existing
+measurement of this workload (dgram/wait about 1.2, sender-bound)
+cannot distinguish the layouts.
+
+Tool assistance: produced with Claude (Anthropic, claude-opus-5-5) as a
+coding assistant, prompted to find and fix performance problems in the
+client-side networking path. Signed-off-by to be added by the
+submitter.
+
+ fs/eventpoll.c | 38 +++++++++++++++++++++-----------------
+ 1 file changed, 21 insertions(+), 17 deletions(-)
+
+diff --git a/fs/eventpoll.c b/fs/eventpoll.c
+index e0c4bf88a838..e88bdb7473b6 100644
+--- a/fs/eventpoll.c
++++ b/fs/eventpoll.c
+@@ -294,30 +294,17 @@ struct epitem {
+  */
+ struct eventpoll {
+ 	/*
+-	 * This mutex is used to ensure that files are not removed
+-	 * while epoll is using them. This is held during the event
+-	 * collection loop, the file cleanup path, the epoll file exit
+-	 * code and the ctl operations.
++	 * ep_poll_callback() writes ->lock, ->rdllist or ->ovflist and, when
++	 * there is a waiter, ->wq.lock. Keep them in the first cacheline.
+ 	 */
+-	struct mutex mtx;
+-
+-	/* Wait queue used by sys_epoll_wait() */
+-	wait_queue_head_t wq;
+-
+-	/* Wait queue used by file->poll() */
+-	wait_queue_head_t poll_wait;
+-
+-	/* List of ready file descriptors */
+-	struct list_head rdllist;
+-
+ 	/* Lock which protects rdllist and ovflist */
+ 	spinlock_t lock;
+ 
+ 	/* Protect switching between rdllist and ovflist */
+ 	seqcount_spinlock_t seq;
+ 
+-	/* RB tree root used to store monitored fd structs */
+-	struct rb_root_cached rbr;
++	/* List of ready file descriptors */
++	struct list_head rdllist;
+ 
+ 	/*
+ 	 * This is a single linked list that chains all the "struct epitem" that
+@@ -326,6 +313,23 @@ struct eventpoll {
+ 	 */
+ 	struct epitem *ovflist;
+ 
++	/* Wait queue used by sys_epoll_wait() */
++	wait_queue_head_t wq;
++
++	/*
++	 * This mutex is used to ensure that files are not removed
++	 * while epoll is using them. This is held during the event
++	 * collection loop, the file cleanup path, the epoll file exit
++	 * code and the ctl operations.
++	 */
++	struct mutex mtx;
++
++	/* Wait queue used by file->poll() */
++	wait_queue_head_t poll_wait;
++
++	/* RB tree root used to store monitored fd structs */
++	struct rb_root_cached rbr;
++
+ 	/* wakeup_source used when ep_send_events or __ep_eventpoll_poll is running */
+ 	struct wakeup_source *ws;
+ 
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
+-- 
+2.53.0
+

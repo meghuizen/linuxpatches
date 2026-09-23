@@ -1,0 +1,25 @@
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 705970d07614..6f598fe37f76 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -866,6 +866,12 @@ struct task_struct {
+ 	u8				is_blocked;
+ 	u8				__pad;
+ 
++	/*
++	 * Read-mostly; also keeps wake_entry from straddling a cacheline
++	 * boundary on 64-bit.
++	 */
++	const cpumask_t			*cpus_ptr;
++
+ 	struct __call_single_node	wake_entry;
+ 	unsigned int			wakee_flips;
+ 	unsigned long			wakee_flip_decay_ts;
+@@ -938,7 +944,6 @@ struct task_struct {
+ 	unsigned int			policy;
+ 	unsigned long			max_allowed_capacity;
+ 	int				nr_cpus_allowed;
+-	const cpumask_t			*cpus_ptr;
+ 	cpumask_t			*user_cpus_ptr;
+ 	cpumask_t			cpus_mask;
+ 	void				*migration_pending;

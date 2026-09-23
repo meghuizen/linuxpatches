@@ -1,0 +1,61 @@
+Commands behind the results in results/. Worktree /usr/src/sub-sched,
+base 518e5b794c06, patch commit 17ebab605729. Object builds only.
+
+Build directories (all O= inside the worktree):
+  build               x86_64, the prepared config (FAIR_GROUP_SCHED, SCHED_CORE,
+                      SCHED_CLASS_EXT, UCLAMP_TASK, SCHEDSTATS, NR_CPUS=64)
+  build-i386          ARCH=i386 defconfig + the same sched options + DWARF5;
+                      M686 => X86_L1_CACHE_SHIFT=5, se is 32-byte aligned (@96)
+  build-i386g         build-i386 + X86_GENERIC => X86_L1_CACHE_SHIFT=6 (se @128)
+  build-nofgs-x86_64  build with CGROUP_SCHED/FAIR_GROUP_SCHED/SCHED_AUTOGROUP off
+  build-nofgs-i386    build-i386 with the same three off
+
+Per config, before and after the patch:
+  nice -n 19 make O=<dir> ARCH=<arch> -j4 kernel/sched/core.o kernel/sched/fair.o
+  cp <dir>/kernel/sched/core.o objs/{base,p2c1}-<cfg>.o
+
+Compile check at the patch (x86_64, i386, x86_64 no-FGS):
+  nice -n 19 make O=<dir> ARCH=<arch> -j4 kernel/sched/core.o kernel/sched/fair.o \
+      kernel/sched/build_policy.o kernel/sched/build_utility.o init/init_task.o kernel/fork.o
+  -> no warnings, no errors.
+
+Layout checks (results/):
+  pahole -C sched_entity / -C task_struct          pahole-sched_entity-<cfg>.txt
+  tests/se-lines.py base.o patched.o [64|32|128]   se-lines-<cfg>[-NB].txt   (exit 0 = nothing worse)
+  kbench linemap-diff.py base.o patched.o task_struct sched_entity
+                                                   linemap-diff-<cfg>.txt
+  kbench verify-sched-layout.py base.o patched.o   verify-sched-layout-<cfg>.txt
+  scripts/bloat-o-meter fair.o, core.o (x86_64)    bloat-o-meter-x86.txt
+
+Summary of results:
+  - sizeof(struct sched_entity): 320/256/224/256/224 (x86 / x86 no-FGS /
+    i386 M686 / i386g / i386 no-FGS), unchanged. sizeof(struct task_struct):
+    3904/3776/2496/2560/2432, unchanged. se offset unchanged (128, or 96 on M686).
+  - linemap-diff task_struct: 0 of N lines changed in every config (only se's
+    interior moves).
+  - se-lines.py: exit 0 in all five configs at 64-byte lines, i386 M686 also at
+    32-byte lines, x86_64 also at 128-byte lines (proxy only). x86_64 FGS:
+    pick 3->1, augment 3->2, update_curr 4->3, update_curr_common 2->1,
+    enqueue/dequeue/set_next 5->4, detach_tasks 3->2, PELT task 4->3, rest same.
+  - verify-sched-layout.py: exit 1 in every config, by design of that script:
+    its three "PATCH A" checks test the wake_entry patch, which is not in this
+    series (dropped, see REVIEW.md). All "PATCH C" checks pass. Note its h_load
+    check is based on a wrong premise (h_load is not written by the load
+    balancer in this tree; it is the EEVDF weight, written in reweight_entity()).
+  - bloat-o-meter: fair.o -97 bytes, core.o +3 bytes (displacement sizes).
+
+Order selection: layout-model.py models the offsets for both ABIs and six
+configs and was used to search member orders; it reproduces pahole for the
+five built configs.
+
+Dropped wake_entry patch (results/p1-*):
+  dropped/wake_entry-standalone-DROPPED.diff = published e27f20d21912 made to
+  apply on 518e5b794c06 (cpus_ptr taken from its original place).
+  linemap-diff task_struct base -> that: 31 of 61 lines change membership.
+  Folding 95c81df7d1ee's nr_cpus_allowed move as well: 35 of 61.
+  i386 (both cache-shift settings): wake_entry @44..51 at base, no straddle.
+
+yield-pick.c: targeted test for TESTS-TO-RUN.md Test 2.
+  gcc -O2 -Wall -static -o yield-pick yield-pick.c
+  results/yield-pick-host-sanity.txt only shows that it runs and perf can count
+  it on the host; it is not a measurement of the patch.

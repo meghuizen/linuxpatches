@@ -1,5 +1,9 @@
 # Task 2 — Put the wakeup-path fields on the wakeup cache lines
 
+> Status (2026-09-23): not submitted, not measured. The successor patch
+> (wake_entry placement) was dropped on analysis: moving `cpus_ptr` saves no line, since
+> readers dereference it to `cpus_mask`. See [`sched/submission/REVIEW.md`](sched/submission/REVIEW.md).
+
 **What the patch does, in one sentence:** it moves two fields that `select_task_rq()` reads on every wakeup (`nr_cpus_allowed`, 4 bytes, and `cpus_ptr`, 8 bytes) from cache line ~20 of `task_struct` up into the first two lines, next to the other wakeup fields — so waking a task pulls two remote cache lines instead of three.
 
 | | |
@@ -8,7 +12,7 @@
 | Kernel | Linux 7.2, vanilla, `/mnt/data/linux-src/linux-7.2` |
 | Patch size | Move 2 declarations (12 bytes of data) |
 | Risk | Low |
-| Realistic gain | One fewer remote cache line transfer per wakeup |
+| Realistic gain | Estimated before measurement: one fewer remote cache line transfer per wakeup. Not shown; see status note. |
 | Depends on | Apply **after** Task 1 (same file, adjacent region) |
 
 ---
@@ -221,7 +225,7 @@ What this specific patch needs to survive review:
 
 ## 10. Realistic expectation
 
-One remote line per wakeup, provable with `perf c2c`. Visible on wakeup-heavy cross-socket workloads; lost in noise on a laptop. It earns its place by being nearly free, mechanically verifiable, and by finishing the packing job the wakeup block started.
+Estimated before measurement: one remote line per wakeup, checkable with `perf c2c`. The later review (status note at the top) found no line saved on the paths that read `cpus_ptr`, because they dereference it to `cpus_mask`. It earns its place by being nearly free, mechanically verifiable, and by finishing the packing job the wakeup block started.
 
 ---
 

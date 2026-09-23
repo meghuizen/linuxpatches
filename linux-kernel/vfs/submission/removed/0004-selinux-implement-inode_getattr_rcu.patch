@@ -1,0 +1,78 @@
+From 0dc47e1454ae93db5ddc1c892072ba9803c2d9c7 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:21:35 +0200
+Subject: [PATCH] selinux: implement inode_getattr_rcu
+
+Same decision as selinux_inode_getattr(), FILE__GETATTR on the inode's
+label, reached without sleeping.
+
+The one thing selinux_inode_getattr() can sleep on is initialising a
+label that has not been read yet: path_has_perm() calls
+__inode_security_revalidate() with may_sleep set, which fetches the
+xattr. Here inode_security_rcu(inode, true) is used instead, the same
+helper selinux_inode_permission() uses under MAY_NOT_BLOCK and
+selinux_inode_follow_link() uses with rcu set: if the label is
+initialised, which it is for anything that has been looked at before,
+it is returned; if not, -ECHILD sends the VFS back to ref-walk, where
+selinux_inode_getattr() will initialise it.
+
+The AVC lookup and the audit on a denial are unchanged and are already
+performed from rcu-walk by the two hooks above; the LSM audit code
+allocates with GFP_ATOMIC.
+
+The task AVD cache short-cut for permissive, never-audit domains is
+kept in front, as in selinux_inode_getattr().
+---
+ security/selinux/hooks.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/security/selinux/hooks.c b/security/selinux/hooks.c
+index e5e17f100aae..6864667d4f1e 100644
+--- a/security/selinux/hooks.c
++++ b/security/selinux/hooks.c
+@@ -3338,6 +3338,34 @@ static int selinux_inode_getattr(const struct path *path)
+ 	return path_has_perm(current_cred(), path, FILE__GETATTR);
+ }
+ 
++/*
++ * The rcu-walk variant of selinux_inode_getattr(): same decision, but the
++ * inode label may only be used if it is already initialised, since
++ * initialising it can sleep. Auditing is fine here, as it is from
++ * selinux_inode_permission() and selinux_inode_follow_link() in rcu-walk:
++ * the LSM audit code allocates with GFP_ATOMIC.
++ */
++static int selinux_inode_getattr_rcu(const struct path *path)
++{
++	struct task_security_struct *tsec = selinux_task(current);
++	struct inode *inode = d_backing_inode(path->dentry);
++	struct inode_security_struct *isec;
++	struct common_audit_data ad;
++
++	if (task_avdcache_permnoaudit(tsec, current_sid()))
++		return 0;
++
++	if (unlikely(!inode))
++		return -ECHILD;
++	isec = inode_security_rcu(inode, true);
++	if (IS_ERR(isec))
++		return PTR_ERR(isec);
++
++	ad.type = LSM_AUDIT_DATA_PATH;
++	ad.u.path = *path;
++	return inode_has_perm(current_cred(), inode, FILE__GETATTR, &ad);
++}
++
+ static bool has_cap_mac_admin(bool audit)
+ {
+ 	const struct cred *cred = current_cred();
+@@ -7595,6 +7623,7 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
+ 	LSM_HOOK_INIT(inode_permission, selinux_inode_permission),
+ 	LSM_HOOK_INIT(inode_setattr, selinux_inode_setattr),
+ 	LSM_HOOK_INIT(inode_getattr, selinux_inode_getattr),
++	LSM_HOOK_INIT(inode_getattr_rcu, selinux_inode_getattr_rcu),
+ 	LSM_HOOK_INIT(inode_xattr_skipcap, selinux_inode_xattr_skipcap),
+ 	LSM_HOOK_INIT(inode_setxattr, selinux_inode_setxattr),
+ 	LSM_HOOK_INIT(inode_post_setxattr, selinux_inode_post_setxattr),
+-- 
+2.53.0
+

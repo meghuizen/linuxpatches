@@ -1,0 +1,98 @@
+# pahole -C eventpoll, base 518e5b794c06 (fs/eventpoll.o, build/.config x86_64)
+struct eventpoll {
+	struct mutex               mtx __attribute__((__aligned__(8))); /*     0    24 */
+	wait_queue_head_t          wq __attribute__((__aligned__(8))); /*    24    24 */
+	wait_queue_head_t          poll_wait __attribute__((__aligned__(8))); /*    48    24 */
+	/* --- cacheline 1 boundary (64 bytes) was 8 bytes ago --- */
+	struct list_head           rdllist;              /*    72    16 */
+	spinlock_t                 lock __attribute__((__aligned__(4))); /*    88     4 */
+	seqcount_spinlock_t        seq;                  /*    92     4 */
+	struct rb_root_cached      rbr;                  /*    96    16 */
+	struct epitem *            ovflist;              /*   112     8 */
+	struct wakeup_source *     ws;                   /*   120     8 */
+	/* --- cacheline 2 boundary (128 bytes) --- */
+	struct user_struct *       user;                 /*   128     8 */
+	struct file *              file;                 /*   136     8 */
+	u64                        gen;                  /*   144     8 */
+	struct hlist_head          refs;                 /*   152     8 */
+	u8                         loop_check_depth;     /*   160     1 */
+
+	/* XXX 3 bytes hole, try to pack */
+
+	refcount_t                 refcount __attribute__((__aligned__(4))); /*   164     4 */
+	struct callback_head       rcu __attribute__((__aligned__(8))); /*   168    16 */
+	unsigned int               napi_id;              /*   184     4 */
+	u32                        busy_poll_usecs;      /*   188     4 */
+	/* --- cacheline 3 boundary (192 bytes) --- */
+	u16                        busy_poll_budget;     /*   192     2 */
+	bool                       prefer_busy_poll;     /*   194     1 */
+
+	/* size: 200, cachelines: 4, members: 20 */
+	/* sum members: 192, holes: 1, sum holes: 3 */
+	/* padding: 5 */
+	/* forced alignments: 6, forced holes: 1, sum forced holes: 3 */
+	/* last cacheline: 8 bytes */
+} __attribute__((__aligned__(8)));
+
+
+# pahole -C eventpoll, with the eventpoll patch (d110c676df57 / 67b6f48fa0e8)
+struct eventpoll {
+	spinlock_t                 lock __attribute__((__aligned__(4))); /*     0     4 */
+	seqcount_spinlock_t        seq;                  /*     4     4 */
+	struct list_head           rdllist;              /*     8    16 */
+	struct epitem *            ovflist;              /*    24     8 */
+	wait_queue_head_t          wq __attribute__((__aligned__(8))); /*    32    24 */
+	struct mutex               mtx __attribute__((__aligned__(8))); /*    56    24 */
+	/* --- cacheline 1 boundary (64 bytes) was 16 bytes ago --- */
+	wait_queue_head_t          poll_wait __attribute__((__aligned__(8))); /*    80    24 */
+	struct rb_root_cached      rbr;                  /*   104    16 */
+	struct wakeup_source *     ws;                   /*   120     8 */
+	/* --- cacheline 2 boundary (128 bytes) --- */
+	struct user_struct *       user;                 /*   128     8 */
+	struct file *              file;                 /*   136     8 */
+	u64                        gen;                  /*   144     8 */
+	struct hlist_head          refs;                 /*   152     8 */
+	u8                         loop_check_depth;     /*   160     1 */
+
+	/* XXX 3 bytes hole, try to pack */
+
+	refcount_t                 refcount __attribute__((__aligned__(4))); /*   164     4 */
+	struct callback_head       rcu __attribute__((__aligned__(8))); /*   168    16 */
+	unsigned int               napi_id;              /*   184     4 */
+	u32                        busy_poll_usecs;      /*   188     4 */
+	/* --- cacheline 3 boundary (192 bytes) --- */
+	u16                        busy_poll_budget;     /*   192     2 */
+	bool                       prefer_busy_poll;     /*   194     1 */
+
+	/* size: 200, cachelines: 4, members: 20 */
+	/* sum members: 192, holes: 1, sum holes: 3 */
+	/* padding: 5 */
+	/* forced alignments: 6, forced holes: 1, sum forced holes: 3 */
+	/* last cacheline: 8 bytes */
+} __attribute__((__aligned__(8)));
+
+
+struct mutex {
+	atomic_long_t              owner;                /*     0     8 */
+	raw_spinlock_t             wait_lock __attribute__((__aligned__(4))); /*     8     4 */
+	struct optimistic_spin_queue osq __attribute__((__aligned__(4))); /*    12     4 */
+	struct mutex_waiter *      first_waiter;         /*    16     8 */
+
+	/* size: 24, cachelines: 1, members: 4 */
+	/* forced alignments: 2 */
+	/* last cacheline: 24 bytes */
+} __attribute__((__aligned__(8)));
+
+struct wait_queue_head {
+	spinlock_t                 lock __attribute__((__aligned__(4))); /*     0     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	struct list_head           head;                 /*     8    16 */
+
+	/* size: 24, cachelines: 1, members: 2 */
+	/* sum members: 20, holes: 1, sum holes: 4 */
+	/* forced alignments: 1 */
+	/* last cacheline: 24 bytes */
+} __attribute__((__aligned__(8)));
+

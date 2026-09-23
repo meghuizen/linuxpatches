@@ -1,5 +1,9 @@
 # Task 3 — Fix false sharing in `struct inode`: refcounts vs `i_fop`
 
+> Status (2026-09-23): removed, not submitted. A layout model over all 8 inode
+> start offsets (ext4, tmpfs) showed +1 line on stat (2 of 8) and on open (2 of 8), and no
+> placement that avoids it. See [`vfs/submission/REVIEW.md`](vfs/submission/REVIEW.md).
+
 **What the patch does, in one sentence:** it moves two read-mostly pointers (`i_fop`, `i_flctx`) off the cache line they currently share with six constantly-written atomic counters (`i_count`, `i_writecount`, `i_dio_count`, ...), so refcount traffic on one CPU stops invalidating the `open()` path on every other CPU.
 
 | | |
@@ -8,7 +12,7 @@
 | Kernel | Linux 7.2, vanilla, `/mnt/data/linux-src/linux-7.2` |
 | Patch size | Part 1: move 2 declarations. Part 2: ~15 lines of build-time asserts |
 | Risk | Low |
-| Realistic gain | Removes a real false-sharing conflict on the `open()`/`iget`/`iput` path; scales with core count and inode sharing |
+| Realistic gain | Estimated before measurement: removes a false-sharing conflict on the `open()`/`iget`/`iput` path. Contradicted by the layout model; see status note. |
 
 ---
 
@@ -276,7 +280,7 @@ Plus the usual: `./scripts/checkpatch.pl --strict` clean, one logical change per
 
 ## 10. Realistic expectation
 
-This is the strongest of the three tasks: not generic tidying but a specific, currently-live false-sharing conflict with an identified reader, identified writers, and a direct measurement method. It is also the same fix, with build-time enforcement, that `sock`, `tcp_sock`, `net_device`, and `dentry` already received — `inode` is simply the last big hot struct still waiting for it. The payoff scales with cores and inode sharing: real on a 64-core build server, invisible on a laptop.
+Written before measurement. The layout model in the status note at the top contradicts the expected gain: `struct inode` starts at all 8 offsets mod 64 in practice, and at some of them the patch adds a line to stat and open. It is also the same fix, with build-time enforcement, that `sock`, `tcp_sock`, `net_device`, and `dentry` already received — `inode` is simply the last big hot struct still waiting for it. The expected payoff (with cores and inode sharing) was never shown.
 
 ---
 

@@ -1,0 +1,199 @@
+From 8bf21f66440780a5bb02a2277a22278437b7465d Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:12:17 +0200
+Subject: [RFC PATCH 2/3] fs: hand the path walk's dentry reference to the
+ opened file
+
+An open() that ends in do_open() -> vfs_open() takes a reference on the
+final dentry twice and drops one of them straight away: complete_walk()
+takes one to leave rcu-walk, do_dentry_open() takes another for
+f->f_path with path_get(), and terminate_walk() drops the walk's. With
+the dput() in __fput(), an open/close cycle does four lockref updates on
+dentry->d_lockref where two are enough. When several CPUs open the same
+file, that cacheline is where they contend.
+
+Let the file take over the walk's dentry reference. do_dentry_open() no
+longer takes references; its callers do. finish_open() and vfs_open()
+take both as before, and the new vfs_open_consume_dentry(), used by
+do_open(), takes only the mount reference, which do_open() still needs
+for mnt_drop_write(). do_open() clears nd->path.dentry whether or not
+the open succeeds, because a failed do_dentry_open() has already
+dropped f_path, which now holds the walk's reference.
+
+Per open()+close() of an existing file through this path, the dentry
+lockref operations go from four (lockref_get_not_dead, lockref_get,
+lockref_put_return twice) to two. The mount count operations are
+unchanged. In the built kernel (x86-64, gcc 15.2) the path_get() call
+leaves do_dentry_open() (287 -> 282 instructions),
+vfs_open_consume_dentry() calls mntget() instead, and path_openat()
+executes one more instruction on this path (575 -> 576 static) for the
+nd->path.dentry = NULL store; the dput() in terminate_walk() then
+returns on its NULL check.
+
+Runtime, x86-64 guest (nested KVM, 16 vCPUs), this patch alone on the
+base commit, 2 boots interleaved with 8 base boots; N processes opening
+and closing one ext4 file, kernel cycles per open (perf stat cycles:k):
+
+  N     base median (range)     patched
+  16    11792 (11326-13011)     6741, 7934
+  4      2819 (2435-3313)       2452, 2272
+  1      2777 (2159-3508)       2338, 2174
+
+At 16 processes an open costs about 38% fewer cycles.  At 1 and 4 the
+patched boots are inside the base range.  A single-process open+close
+loop executes the same number of kernel instructions within the
+per-boot spread (ext4: base 7006-7296, patched 7060 and 7063).
+
+Tested: fs/open.o and fs/namei.o build (x86-64, gcc 15.2, no new
+warnings).  On both boots the openat2 selftests pass, an error-path
+test (O_CREAT|O_TRUNC, O_DIRECT failing after the open, EACCES from
+may_open(), ENOTDIR) followed by umount of both filesystems shows no
+leaked reference, and the kernel logs no warnings.
+
+Assisted-by: Claude
+---
+Impact: medium -- many processes opening one file (shared libraries,
+build trees); on an uncontended open the saving is two atomic RMWs on a
+line the opener usually already owns.
+
+Prior art: Mateusz Guzik has posted the same dentry transfer (his v5
+also hands over the mount reference and takes a separate mntget() for
+O_TRUNC), and Al Viro has a series in the same area. This version moves
+path_get() out of do_dentry_open() into its callers, as Guzik's does,
+and keeps the mount reference with the nameidata.
+[SUBMITTER: add Link: to Guzik's posting; see REVIEW.md before sending]
+
+Cycles are the measure here because the effect is contention on
+d_lockref's cacheline; the host (a laptop running KVM nested in
+Hyper-V) does not show CPU frequency to the guest, so the per-boot
+spread in cycles is wide at N=1 and N=4.  Not tested: other
+filesystems, network filesystems, architectures other than x86-64.
+
+ fs/internal.h |  1 +
+ fs/namei.c    | 12 ++++++++++--
+ fs/open.c     | 43 +++++++++++++++++++++++++++++++++++--------
+ 3 files changed, 46 insertions(+), 10 deletions(-)
+
+diff --git a/fs/internal.h b/fs/internal.h
+index c658c8a5ebd5..5a98495f3e46 100644
+--- a/fs/internal.h
++++ b/fs/internal.h
+@@ -205,6 +205,7 @@ int do_fchownat(int dfd, const char __user *filename, uid_t user, gid_t group,
+ 		int flag);
+ int chown_common(const struct path *path, uid_t user, gid_t group);
+ extern int vfs_open(const struct path *, struct file *);
++int vfs_open_consume_dentry(const struct path *path, struct file *file);
+ 
+ /*
+  * inode.c
+diff --git a/fs/namei.c b/fs/namei.c
+index 20a6534ea3ef..4219484ed328 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -4833,8 +4833,16 @@ static int do_open(struct nameidata *nd,
+ 		do_truncate = true;
+ 	}
+ 	error = may_open(idmap, &nd->path, acc_mode, open_flag);
+-	if (!error && !(file->f_mode & FMODE_OPENED))
+-		error = vfs_open(&nd->path, file);
++	if (!error && !(file->f_mode & FMODE_OPENED)) {
++		/*
++		 * The file takes over the walk's reference on the dentry, so
++		 * terminate_walk() must not drop it, whether or not the open
++		 * succeeds. The mount reference stays with nd for
++		 * mnt_drop_write() below.
++		 */
++		error = vfs_open_consume_dentry(&nd->path, file);
++		nd->path.dentry = NULL;
++	}
+ 	if (!error)
+ 		error = security_file_post_open(file, op->acc_mode);
+ 	if (!error && do_truncate)
+diff --git a/fs/open.c b/fs/open.c
+index 6b1c14e684a9..630d9b32feba 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -931,6 +931,11 @@ static inline int file_get_write_access(struct file *f)
+ 	return error;
+ }
+ 
++/*
++ * The caller has set f->f_path and holds a reference on its mount and dentry
++ * for the file. If the open fails before FMODE_OPENED is set they are dropped
++ * here; otherwise they belong to the file and __fput() drops them.
++ */
+ static int do_dentry_open(struct file *f,
+ 			  int (*open)(struct inode *, struct file *))
+ {
+@@ -938,7 +943,6 @@ static int do_dentry_open(struct file *f,
+ 	struct inode *inode = f->f_path.dentry->d_inode;
+ 	int error;
+ 
+-	path_get(&f->f_path);
+ 	f->f_inode = inode;
+ 	f->f_mapping = inode->i_mapping;
+ 	f->f_wb_err = filemap_sample_wb_err(f->f_mapping);
+@@ -1055,6 +1059,7 @@ int finish_open(struct file *file, struct dentry *dentry,
+ 	BUG_ON(file->f_mode & FMODE_OPENED); /* once it's opened, it's opened */
+ 
+ 	file->__f_path.dentry = dentry;
++	path_get(&file->f_path);
+ 	return do_dentry_open(file, open);
+ }
+ EXPORT_SYMBOL(finish_open);
+@@ -1088,16 +1093,10 @@ char *file_path(struct file *filp, char *buf, int buflen)
+ }
+ EXPORT_SYMBOL(file_path);
+ 
+-/**
+- * vfs_open - open the file at the given path
+- * @path: path to open
+- * @file: newly allocated file with f_flag initialized
+- */
+-int vfs_open(const struct path *path, struct file *file)
++static int __vfs_open(struct file *file)
+ {
+ 	int ret;
+ 
+-	file->__f_path = *path;
+ 	ret = do_dentry_open(file, NULL);
+ 	if (!ret) {
+ 		/*
+@@ -1110,6 +1109,34 @@ int vfs_open(const struct path *path, struct file *file)
+ 	return ret;
+ }
+ 
++/**
++ * vfs_open - open the file at the given path
++ * @path: path to open
++ * @file: newly allocated file with f_flag initialized
++ */
++int vfs_open(const struct path *path, struct file *file)
++{
++	file->__f_path = *path;
++	path_get(&file->f_path);
++	return __vfs_open(file);
++}
++
++/**
++ * vfs_open_consume_dentry - open a path, taking over the dentry reference
++ * @path: path to open
++ * @file: newly allocated file with f_flag initialized
++ *
++ * Like vfs_open(), but the caller's reference on @path->dentry is handed to
++ * @file instead of a new one being taken. It is consumed whether or not the
++ * open succeeds. The reference on @path->mnt is not consumed.
++ */
++int vfs_open_consume_dentry(const struct path *path, struct file *file)
++{
++	file->__f_path = *path;
++	mntget(path->mnt);
++	return __vfs_open(file);
++}
++
+ struct file *dentry_open(const struct path *path, int flags,
+ 			 const struct cred *cred)
+ {
+-- 
+2.53.0
+

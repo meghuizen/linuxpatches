@@ -1,0 +1,11 @@
+# host sanity run of yield-pick (host kernel 6.18.40.1-microsoft-standard-WSL2, NOT a test of the patch)
+## ntasks=2: perf stat -C 5 -x, -e context-switches,L1-dcache-load-misses,instructions:k,cycles:k -- ./yield-pick 5 2 2
+91222,,context-switches,2011303564,100.00,,
+17701730,,L1-dcache-load-misses,2011378075,100.00,,
+356324888,,instructions:k,2011282133,100.00,,
+689662629,,cycles:k,2011129703,100.00,,
+## ntasks=64: perf stat -C 5 -x, -e context-switches,L1-dcache-load-misses,instructions:k,cycles:k -- ./yield-pick 5 64 2
+871895,,context-switches,2053400196,100.00,,
+217502709,,L1-dcache-load-misses,2053395036,100.00,,
+3699975465,,instructions:k,2053277513,100.00,,
+6365620871,,cycles:k,2053184316,100.00,,

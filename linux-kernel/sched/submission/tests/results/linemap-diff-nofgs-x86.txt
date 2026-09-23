@@ -1,0 +1,22 @@
+========================================================================
+task_struct: cachelines whose membership changed
+========================================================================
+  (0 of 59 lines changed)
+
+========================================================================
+sched_entity: cachelines whose membership changed
+========================================================================
+  line  0 (bytes 0-63):
+      + min_vruntime, slice, vlag, vruntime
+      - h_load, load
+      = deadline, run_node
+  line  1 (bytes 64-127):
+      + h_load, load, prev_sum_exec_runtime, vprot
+      - custom_slice, exec_start, group_node, min_vruntime, on_rq, rel_deadline, sched_delayed, sum_exec_runtime
+      = max_slice, min_slice
+  line  2 (bytes 128-191):
+      + custom_slice, exec_start, group_node, on_rq, rel_deadline, sched_delayed, sum_exec_runtime
+      - prev_sum_exec_runtime, slice, vlag, vprot, vruntime
+      = nr_migrations
+  (3 of 4 lines changed)
+

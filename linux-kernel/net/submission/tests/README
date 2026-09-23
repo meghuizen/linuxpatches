@@ -1,0 +1,61 @@
+Tests for the networking series.  Everything here ran on the build host
+(x86_64, GCC 15.2, perf 6.x on the WSL2 kernel) except where a file says
+"run in guest".  No VM was booted.
+
+build_step.sh
+    Builds the touched objects (W=1) at one commit into build/ and copies
+    them to a per-step directory.  Run at every commit of sub-net,
+    sub-net-nf and sub-net-netnext: all built, no warnings.  i386 objects
+    (nf_conntrack_core.o, lib/siphash.o) were built the same way in a
+    separate O=build-i386 directory from an i386 defconfig with
+    NF_CONNTRACK, NF_NAT, NF_FLOW_TABLE, NET_SCH_CAKE and BRIDGE enabled.
+
+insn-count/
+    harness.c + run.sh: links flow_offload_hash() (objcopy
+    --globalize-symbol from nf_flow_table_core.o), lib/siphash.o and
+    lib/string.o, all built from this tree for x86_64, into a static
+    userspace binary and counts instructions:u per call with perf stat
+    (20M iterations minus 0 iterations).  results-x86_64.txt.
+    harness32.c + run32.sh: the same for the i386 lib/siphash.o, built
+    freestanding (no 32-bit libc on the host), %fs set up for the
+    kernel's stack-protector reads.  results-i386.txt.
+    Per-call numbers include the loop and call overhead ("null" row, 11
+    instructions on x86_64) and a ret for each of __fentry__ and
+    __x86_return_thunk, which the running kernel patches to a nop and a
+    ret.  Differences between rows are exact for that code.
+
+    Commands:
+      KOBJ=<dir with siphash.o string.o> ./run.sh <base objdir> <patched objdir>
+      ./run32.sh <dir with i386 siphash.o>
+
+hashbench.c, count_insns.sh
+    hashbench.c is the userspace copy of the hash primitives from the old
+    work (unchanged).  count_insns.sh counts static instructions of one
+    function in an object.  Compiled with -O2 -fcf-protection=none for
+    x86_64, i386 (-m32), aarch64 (-mcpu=cortex-a53), rv64gc, rv64gc_zbb:
+
+      function              x86_64  i386  A53  rv64gc  rv64gc_zbb
+      bench_siphash_39u        228   733  177     411         245
+      bench_siphash_2u64       164   514  128     297         179
+      bench_jhash_88u           73    84   56       7           7
+      bench_jhash_42u           73    86   56       7           7
+
+    The siphash rows reproduce the README table (x86_64 228, README 229).
+    The jhash rows do not: GCC 15.2 at -O2 keeps the "unrolled" loop, so
+    the static count is not the dynamic count, and bench_jhash_42u feeds
+    one tail byte where jhash() of 42 bytes feeds six.  The old flowtable
+    figures (274 -> 134) also left out the memchr_inv() call the patch
+    adds; the in-kernel code measured with insn-count/ is 321 -> 276 for
+    a plain flow and 321 -> 353 for an encapsulated one.
+
+arpflood/  (run in guest)
+    arpflood.c sends N broadcast ARP requests through AF_PACKET.
+    run-in-guest.sh builds a 4-port bridge with no proxy_arp or
+    neigh_suppress, 200 permanent neighbour entries for the targets, and
+    reports kernel instructions per frame on the sending CPU.  Compiled
+    on the host with -Wall -Wextra, not run.
+
+cake-slack/  (run in guest)
+    cake_slack.c sets and reads TCA_CAKE_TIMER_SLACK over raw rtnetlink,
+    since stock tc cannot.  Compiled on the host with -Wall -Wextra, not
+    run.

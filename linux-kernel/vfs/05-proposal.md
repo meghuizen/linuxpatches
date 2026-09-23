@@ -1,6 +1,12 @@
 # The proposal
 
-Fifteen patches against Linux 7.3.0-rc3+824 (`518e5b794c06`), in `patches/`,
+> Status (measured 2026-09-23): superseded. Of this series, 3 patches go upstream
+> (openat2 selftests, dentry handoff, lazy file allocation); the rest were removed.
+> See [`submission/REVIEW.md`](submission/REVIEW.md) and [`README.md`](README.md#status).
+
+Fifteen patches against Linux 7.3.0-rc3+824 (`518e5b794c06`), originally
+exported to `patches/` (that export is superseded by [`submission/`](submission/)
+and [`submission/removed/`](submission/removed/)),
 built as commits on the `vfs-series` branch of the worktree `/usr/src/linux-vfs`.
 This document is the argument for them as a whole: what each one removes from
 the warm path, why that is the thing to remove, what each costs, and what was

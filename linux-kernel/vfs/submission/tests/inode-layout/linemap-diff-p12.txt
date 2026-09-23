@@ -1,0 +1,25 @@
+========================================================================
+inode: cachelines whose membership changed
+========================================================================
+  line  1 (bytes 64-127):
+      + i_flctx, i_fop
+      - i_atime_nsec, i_ctime_nsec, i_generation, i_mtime_nsec
+      = __i_nlink, i_atime_sec, i_ctime_sec, i_ino, i_mtime_sec, i_nlink, i_rdev, i_size
+  line  2 (bytes 128-191):
+      + i_atime_nsec, i_ctime_nsec, i_generation, i_mtime_nsec
+      - dirtied_when
+      = i_blkbits, i_blocks, i_bytes, i_lock, i_rwsem, i_state, i_write_hint
+  line  3 (bytes 192-255):
+      + dirtied_when, i_rwsem
+      - i_lru, i_wb_frn_avg_time, i_wb_frn_history, i_wb_frn_winner
+      = dirtied_time_when, i_hash, i_io_list, i_wb
+  line  4 (bytes 256-319):
+      + i_wb_frn_avg_time, i_wb_frn_history, i_wb_frn_winner
+      - i_version
+      = i_dentry, i_lru, i_rcu, i_sb_list, i_wb_list
+  line  5 (bytes 320-383):
+      + i_rcu, i_version
+      - i_flctx, i_fop
+      = i_count, i_data, i_dio_count, i_readcount, i_sequence, i_writecount
+  (5 of 9 lines changed)
+

@@ -1,0 +1,385 @@
+patchtest-report: 29 boots in 20260923-142759 .. 20260923-181957
+boot order:
+  20260923-142759  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+  20260923-143742  pt-dentry      7.3.0-rc3-kbench-pt-dentry-00825-g8ad517267859
+  20260923-144746  pt-lockref     7.3.0-rc3-kbench-pt-lockref-00825-g1eb071299ac8
+  20260923-145435  pt-lazyalloc   7.3.0-rc3-kbench-pt-lazyalloc-00825-g63187e2eb503
+  20260923-150058  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+  20260923-150620  pt-eevdf       7.3.0-rc3-kbench-pt-eevdf-00825-g17ebab605729
+  20260923-151456  pt-nf          7.3.0-rc3-kbench-pt-nf-00827-g306c593487f7
+  20260923-152327  pt-cake        7.3.0-rc3-kbench-pt-cake-00825-g6983e53e217f
+  20260923-153159  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+  20260923-153923  pt-bridge      7.3.0-rc3-kbench-pt-bridge-00825-g864e965bc40b
+  20260923-154512  pt-udp         7.3.0-rc3-kbench-pt-udp-00825-gf6c6f3cb5ee9
+  20260923-155156  pt-epoll       7.3.0-rc3-kbench-pt-epoll-00825-gd110c676df57
+  20260923-160446  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+  20260923-161750  pt-all         7.3.0-rc3-kbench-pt-all-00836-g3368e517e2d4
+  20260923-162835  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+  20260923-163419  pt-all         7.3.0-rc3-kbench-pt-all-00836-g3368e517e2d4
+  20260923-165011  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+  20260923-170419  pt-epoll       7.3.0-rc3-kbench-pt-epoll-00825-gd110c676df57
+  20260923-171409  pt-udp         7.3.0-rc3-kbench-pt-udp-00825-gf6c6f3cb5ee9
+  20260923-172158  pt-bridge      7.3.0-rc3-kbench-pt-bridge-00825-g864e965bc40b
+  20260923-173319  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+  20260923-174211  pt-cake        7.3.0-rc3-kbench-pt-cake-00825-g6983e53e217f
+  20260923-175345  pt-nf          7.3.0-rc3-kbench-pt-nf-00827-g306c593487f7
+  20260923-175844  pt-eevdf       7.3.0-rc3-kbench-pt-eevdf-00825-g17ebab605729
+  20260923-180114  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+  20260923-180432  pt-lazyalloc   7.3.0-rc3-kbench-pt-lazyalloc-00825-g63187e2eb503
+  20260923-181143  pt-lockref     7.3.0-rc3-kbench-pt-lockref-00825-g1eb071299ac8
+  20260923-181436  pt-dentry      7.3.0-rc3-kbench-pt-dentry-00825-g8ad517267859
+  20260923-181957  baseline       7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+
+====================================================================================================
+PATCH pt-dentry   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-143742  patchtest-7.3.0-rc3-kbench-pt-dentry-00825-g8ad517267859-20260923-143742
+  variant  20260923-181436  patchtest-7.3.0-rc3-kbench-pt-dentry-00825-g8ad517267859-20260923-181436
+  baseline 20260923-142759  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-142759
+  baseline 20260923-150058  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-150058
+  baseline 20260923-180114  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-180114
+  baseline 20260923-181957  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-181957
+RULE: vfs TESTS-TO-RUN T1/T2: the patch removes two dentry lockref operations per open (4 -> 2). IMPROVES if lockref calls per open, kernel instructions per open, or the 16-process storm cost per open drop beyond the baseline spread. REGRESSES if the 1- or 4-process storm gets worse by more than 5% (the TESTS-TO-RUN HOLD criterion) or beyond spread. FUNC FAIL on any error-path, umount (reference leak) or openat2 failure that baseline does not have.
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+vfs.enoent.ext4            kinsn_per_op                       5407.6     5484.2    +1.42     4.41 same      GUARD
+vfs.lockcalls.ext4         lockref_total_per_op                    0          0    +0.00     0.00 same      TARGET
+vfs.open.ext4              kinsn_per_op                       7091.4     7061.5    -0.42     4.06 same      TARGET
+vfs.open.tmpfs             kinsn_per_op                       6878.8     6892.5    +0.20     4.07 same      TARGET
+vfs.stat.ext4              kinsn_per_op                       4324.5     4369.7    +1.05     2.10 same      GUARD
+vfs.storm.p1.ext4          kcyc_per_op                        2581.5     2255.9   -12.61    48.98 same      GUARD
+vfs.storm.p16.ext4         kcyc_per_op                       12432.6     7337.3   -40.98    19.60 LOWER     TARGET
+vfs.storm.p4.ext4          kcyc_per_op                        2477.7     2361.9    -4.68    33.36 same      GUARD
+
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.emptypath_test       variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.openat2_test         variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.rename_attack_test   variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.resolve_test         variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.errpaths                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.errpaths-umount          variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.tmpfs-umount             variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+
+VERDICT pt-dentry: IMPROVES
+  - improved: vfs.storm.p16.ext4 kcyc_per_op
+
+====================================================================================================
+PATCH pt-lockref   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-144746  patchtest-7.3.0-rc3-kbench-pt-lockref-00825-g1eb071299ac8-20260923-144746
+  variant  20260923-181143  patchtest-7.3.0-rc3-kbench-pt-lockref-00825-g1eb071299ac8-20260923-181143
+  baseline 20260923-142759  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-142759
+  baseline 20260923-150058  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-150058
+  baseline 20260923-180114  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-180114
+  baseline 20260923-181957  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-181957
+RULE: lockref single 64-bit addition: fewer instructions in every lockref_* function (44 -> 37 in lockref_get), same call count. IMPROVES if kernel instructions per open or per stat drop beyond the baseline spread. REGRESSES if any storm row's cycles per open get worse beyond spread.
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+vfs.lockcalls.ext4         lockref_total_per_op                    0          0    +0.00     0.00 same      EQUAL
+vfs.open.ext4              kinsn_per_op                       7091.4     7134.4    +0.61     4.06 same      TARGET
+vfs.open.tmpfs             kinsn_per_op                       6878.8     6916.5    +0.55     4.07 same      TARGET
+vfs.stat.ext4              kinsn_per_op                       4324.5     4358.1    +0.78     2.10 same      TARGET
+vfs.stat.tmpfs             kinsn_per_op                       4432.0     4426.7    -0.12     2.00 same      TARGET
+vfs.storm.p1.ext4          kcyc_per_op                        2581.5     2312.1   -10.44    48.98 same      GUARD
+vfs.storm.p16.ext4         kcyc_per_op                       12432.6    11344.8    -8.75    19.60 same      GUARD
+vfs.storm.p4.ext4          kcyc_per_op                        2477.7     2739.4   +10.56    33.36 same      GUARD
+
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.emptypath_test       variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.openat2_test         variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.rename_attack_test   variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.resolve_test         variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.errpaths                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.errpaths-umount          variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.tmpfs-umount             variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+
+VERDICT pt-lockref: NO DIFFERENCE
+  - targets checked: vfs.open.ext4 kinsn_per_op, vfs.open.tmpfs kinsn_per_op, vfs.stat.ext4 kinsn_per_op, vfs.stat.tmpfs kinsn_per_op -- fewer than 1 outside the spread
+
+====================================================================================================
+PATCH pt-lazyalloc   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-145435  patchtest-7.3.0-rc3-kbench-pt-lazyalloc-00825-g63187e2eb503-20260923-145435
+  variant  20260923-180432  patchtest-7.3.0-rc3-kbench-pt-lazyalloc-00825-g63187e2eb503-20260923-180432
+  baseline 20260923-142759  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-142759
+  baseline 20260923-150058  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-150058
+  baseline 20260923-180114  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-180114
+  baseline 20260923-181957  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-181957
+RULE: vfs TESTS-TO-RUN T3: allocate struct file only after the cheap failures. Keep only if a failed open on ext4 (cached negative dentry) saves at least 100 kernel instructions AND the successful open costs no more than 10 instructions more; otherwise DROP. tmpfs ENOENT (no negative dentries) is expected unchanged.
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+sched.pingpong.same        kinsn_per_switch                   7886.4     7566.8    -4.05     3.85 LOWER     
+vfs.enoent.ext4            kinsn_per_op                       5407.6     4220.9   -21.94     4.41 LOWER     TARGET
+vfs.enoent.tmpfs           kinsn_per_op                       8952.2     7804.5   -12.82     9.27 LOWER     GUARD
+vfs.open.ext4              kinsn_per_op                       7091.4     7236.6    +2.05     4.06 same      GUARD
+vfs.open.tmpfs             kinsn_per_op                       6878.8     6981.9    +1.50     4.07 same      GUARD
+vfs.stat.ext4              l1miss_per_op                      0.5925      4.714  +695.59   189.84 HIGHER    
+
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.emptypath_test       variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.openat2_test         variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.rename_attack_test   variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC openat2.resolve_test         variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.errpaths                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.errpaths-umount          variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC vfs.tmpfs-umount             variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+
+VERDICT pt-lazyalloc: REGRESSES
+  - vfs.stat.ext4 l1miss_per_op: worse beyond spread (same area, not a target/guard of this patch: re-run to confirm before acting)
+  - other metrics lower beyond spread (not claimed by this patch): sched.pingpong.same kinsn_per_switch
+
+====================================================================================================
+PATCH pt-eevdf   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-150620  patchtest-7.3.0-rc3-kbench-pt-eevdf-00825-g17ebab605729-20260923-150620
+  variant  20260923-175844  patchtest-7.3.0-rc3-kbench-pt-eevdf-00825-g17ebab605729-20260923-175844
+  baseline 20260923-150058  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-150058
+  baseline 20260923-153159  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-153159
+  baseline 20260923-173319  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-173319
+  baseline 20260923-180114  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-180114
+RULE: sched TESTS-TO-RUN: IMPROVES (RFC -> SEND) only if yield-pick L1 misses per switch are lower at N >= 128 beyond the spread, with kernel cycles per switch not higher. Kernel instructions per switch must be equal within 0.5% (the patch changes no code; a larger difference is reported as SUSPECT BUILD). REGRESSES if a ping-pong (switch/wakeup) counter gets worse beyond spread. No difference at N=512 = NO DIFFERENCE (DROP).
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+sched.pingpong.cross       kcyc_per_switch                   28706.6    38248.8   +33.24   209.11 same      GUARD
+sched.pingpong.cross       l1miss_per_switch                   464.6      530.3   +14.16   133.30 same      GUARD
+sched.pingpong.same        kcyc_per_switch                    4348.6     5174.1   +18.98    77.24 same      GUARD
+sched.pingpong.same        l1miss_per_switch                   42.03      41.09    -2.25    99.29 same      GUARD
+sched.yield.n128           kcyc_per_switch                    3582.6     3551.7    -0.86    68.42 same      GUARD
+sched.yield.n128           kinsn_per_switch                   4024.8     4065.6    +1.01    16.37 same      EQUAL
+sched.yield.n128           l1miss_per_switch                   131.3      125.4    -4.47    22.56 same      TARGET
+sched.yield.n16            kinsn_per_switch                   3667.8     3760.1    +2.52    10.06 same      EQUAL
+sched.yield.n2             kinsn_per_switch                   3450.1     3445.9    -0.12     8.67 same      EQUAL
+sched.yield.n2             l1miss_per_switch                   15.12      12.47   -17.49   112.71 same      GUARD
+sched.yield.n256           kcyc_per_switch                    3600.7     3698.3    +2.71    48.65 same      GUARD
+sched.yield.n256           kinsn_per_switch                   4140.7     4135.4    -0.13    12.76 same      EQUAL
+sched.yield.n256           l1miss_per_switch                   134.3      130.6    -2.72     9.55 same      TARGET
+sched.yield.n512           kcyc_per_switch                    3445.7     5532.5   +60.56    80.07 same      GUARD
+sched.yield.n512           kinsn_per_switch                   4036.6     4094.1    +1.42    11.78 same      EQUAL
+sched.yield.n512           l1miss_per_switch                   140.2      155.9   +11.19     8.14 HIGHER    TARGET
+sched.yield.n64            kinsn_per_switch                   3951.0     3961.0    +0.25    12.87 same      EQUAL
+
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+
+VERDICT pt-eevdf: REGRESSES
+  - sched.yield.n512 l1miss_per_switch: target got worse
+
+====================================================================================================
+PATCH pt-nf   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-151456  patchtest-7.3.0-rc3-kbench-pt-nf-00827-g306c593487f7-20260923-151456
+  variant  20260923-175345  patchtest-7.3.0-rc3-kbench-pt-nf-00827-g306c593487f7-20260923-175345
+  baseline 20260923-150058  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-150058
+  baseline 20260923-153159  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-153159
+  baseline 20260923-173319  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-173319
+  baseline 20260923-180114  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-180114
+RULE: net TESTS-TO-RUN T6/T7: IMPROVES if kernel instructions per packet (stream: one IPv4 hash less per packet, expected ~80), per new flow, or per flushed entry (expected 330-400 less) drop beyond spread. FUNC: ctnetlink insert + delete across a resize, a resize during churn, 9x nf_conntrack_max must log exactly once, 8x must not, a non-init netns write must be refused.
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+net.ct.flush               kinsn_per_entry                    1908.6     1311.5   -31.28     1.63 LOWER     TARGET
+net.ct.newflow             kinsn_per_pkt                     16843.3    16686.0    -0.93     2.05 same      TARGET
+net.ct.stream              kinsn_per_pkt                     14421.5    14310.8    -0.77     3.84 same      TARGET
+
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC net.ct.ctnetlink             variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC net.ct.hook                  variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC net.ct.resize                variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC net.ctmax.8x-silent          variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC net.ctmax.9x-logs            variant PASS/PASS        baseline SKIP/SKIP/SKIP/SKIP PASS
+FUNC net.ctmax.netns-ro           variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+
+VERDICT pt-nf: IMPROVES
+  - improved: net.ct.flush kinsn_per_entry
+
+====================================================================================================
+PATCH pt-cake   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-152327  patchtest-7.3.0-rc3-kbench-pt-cake-00825-g6983e53e217f-20260923-152327
+  variant  20260923-174211  patchtest-7.3.0-rc3-kbench-pt-cake-00825-g6983e53e217f-20260923-174211
+  baseline 20260923-150058  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-150058
+  baseline 20260923-153159  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-153159
+  baseline 20260923-173319  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-173319
+  baseline 20260923-180114  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-180114
+RULE: net TESTS-TO-RUN T1/T3: with the default slack 0 the patch must be inert: any difference vs baseline on a net.cake.s0us counter is reported (NOT INERT -> must not be sent). The effect is measured inside the patched boots: IMPROVES if hrtimer expiries per packet (and kernel instructions per packet) fall as the slack grows, comparing 10/50/100 us against 0 in the same boots, beyond the 0-slack rep spread. Ping p99 under load is reported, not judged. The patch stays HOLD until iproute2 can set the attribute.
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+net.cake.s0us              hrtimer_expire_per_pkt             0.1513     0.1579    +4.32   184.93 same      EQUAL
+net.cake.s0us              hrtimer_start_per_pkt               1.149      1.153    +0.38    29.04 same      EQUAL
+net.cake.s0us              kinsn_per_pkt                     26047.4    28387.7    +8.98   117.77 same      EQUAL
+net.cake.s0us              softirq_per_pkt                     1.031       1.03    -0.06     2.56 same      EQUAL
+sched.yield.n2             kcyc_per_switch                    2388.3     3365.7   +40.92    35.82 HIGHER    
+INTRA net.cake.s100us  vs net.cake.s0us hrtimer_expire_per_pkt  per-boot delta -67.46% -3.19%; reps separated: yes/no  -> no consistent drop
+INTRA net.cake.s100us  vs net.cake.s0us kinsn_per_pkt           per-boot delta -20.51% -0.16%; reps separated: no/no  -> no consistent drop
+INTRA net.cake.s50us   vs net.cake.s0us hrtimer_expire_per_pkt  per-boot delta -64.62% +5.09%; reps separated: yes/no  -> no consistent drop
+INTRA net.cake.s10us   vs net.cake.s0us hrtimer_expire_per_pkt  per-boot delta -15.68% -1.81%; reps separated: no/no  -> no consistent drop
+
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC net.cake.s100us.set          variant PASS/PASS        baseline SKIP/SKIP/SKIP/SKIP PASS
+FUNC net.cake.s10us.set           variant PASS/PASS        baseline SKIP/SKIP/SKIP/SKIP PASS
+FUNC net.cake.s50us.set           variant PASS/PASS        baseline SKIP/SKIP/SKIP/SKIP PASS
+FUNC net.cake.slack-attr          variant PASS/PASS        baseline MISSING/MISSING/MISSING/MISSING PASS
+
+VERDICT pt-cake: REGRESSES
+  - sched.yield.n2 kcyc_per_switch: worse beyond spread (cross-area, not a target/guard of this patch: re-run to confirm before acting)
+
+====================================================================================================
+PATCH pt-bridge   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-153923  patchtest-7.3.0-rc3-kbench-pt-bridge-00825-g864e965bc40b-20260923-153923
+  variant  20260923-172158  patchtest-7.3.0-rc3-kbench-pt-bridge-00825-g864e965bc40b-20260923-172158
+  baseline 20260923-153159  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-153159
+  baseline 20260923-160446  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-160446
+  baseline 20260923-165011  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-165011
+  baseline 20260923-173319  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-173319
+RULE: net TESTS-TO-RUN T4: kernel instructions per ARP frame must drop by at least 2% (and beyond spread), else DROP. proxy_arp must still answer when a port enables it (0/20/0 replies off/on/off).
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+net.bridge.arpflood        kinsn_per_frame                   20321.1    20158.5    -0.80     2.82 same      TARGET
+
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC net.bridge.proxyarp          variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+
+VERDICT pt-bridge: NO DIFFERENCE
+  - targets checked: net.bridge.arpflood kinsn_per_frame -- fewer than 1 outside the spread
+
+====================================================================================================
+PATCH pt-udp   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-154512  patchtest-7.3.0-rc3-kbench-pt-udp-00825-gf6c6f3cb5ee9-20260923-154512
+  variant  20260923-171409  patchtest-7.3.0-rc3-kbench-pt-udp-00825-gf6c6f3cb5ee9-20260923-171409
+  baseline 20260923-153159  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-153159
+  baseline 20260923-160446  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-160446
+  baseline 20260923-165011  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-165011
+  baseline 20260923-173319  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-173319
+RULE: client TESTS-TO-RUN T1a-c: IMPROVES if ep_poll_callback calls per datagram drop below baseline at 6 or 12 senders (baseline: exactly one per datagram). FUNC FAIL on any lost datagram or late wakeup with threads blocked in recv(). REGRESSES (HOLD) if one-sender kernel instructions per datagram rise by more than 0.5%.
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+client.udp.epoll.s1        epcb_per_dgram                          1          1    -0.00     0.02 same      GUARD
+client.udp.epoll.s1        sock_def_readable_per_dgram             1          0  -100.00     0.00 LOWER     
+client.udp.epoll.s12       epcb_per_dgram                          1     0.4575   -54.25     0.00 LOWER     TARGET
+client.udp.epoll.s12       sock_def_readable_per_dgram             1          0  -100.00     0.00 LOWER     
+client.udp.epoll.s6        epcb_per_dgram                          1     0.8896   -11.04     0.00 LOWER     TARGET
+client.udp.epoll.s6        sock_def_readable_per_dgram             1          0  -100.00     0.00 LOWER     
+client.udp.s1              kinsn_per_dgram                    9384.7     9222.6    -1.73    12.47 same      GUARD
+
+FUNC client.udp.block             variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+
+VERDICT pt-udp: IMPROVES
+  - improved: client.udp.epoll.s12 epcb_per_dgram, client.udp.epoll.s6 epcb_per_dgram
+  - other metrics lower beyond spread (not claimed by this patch): client.udp.epoll.s1 sock_def_readable_per_dgram, client.udp.epoll.s12 sock_def_readable_per_dgram, client.udp.epoll.s6 sock_def_readable_per_dgram
+
+====================================================================================================
+PATCH pt-epoll   variant boots: 2   adjacent baseline boots: 4   baseline boots in window: 9
+  variant  20260923-155156  patchtest-7.3.0-rc3-kbench-pt-epoll-00825-gd110c676df57-20260923-155156
+  variant  20260923-170419  patchtest-7.3.0-rc3-kbench-pt-epoll-00825-gd110c676df57-20260923-170419
+  baseline 20260923-153159  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-153159
+  baseline 20260923-160446  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-160446
+  baseline 20260923-165011  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-165011
+  baseline 20260923-173319  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-173319
+RULE: client TESTS-TO-RUN T2a/T2b: IMPROVES (-> RFC) only if cycles or L1 misses per callback with 4 writers drop beyond the spread; otherwise NO DIFFERENCE (DROP: a layout patch with no measurable effect). REGRESSES if the uncontended loop's cycles or L1 misses rise by more than 5% (T2a) or its kernel instructions by more than 0.2%.
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+client.epoll.multi4        kcyc_per_callback                  1439.2     1427.1    -0.84    61.59 same      TARGET
+client.epoll.multi4        l1miss_per_callback                 7.968      7.346    -7.81    45.86 same      TARGET
+client.epoll.single        kcyc_per_op                        1506.1     1616.4    +7.32    41.84 same      GUARD
+client.epoll.single        kinsn_per_op                       3183.8     3206.6    +0.72     3.16 same      GUARD
+client.epoll.single        l1miss_per_op                       3.129      4.698   +50.15   158.65 same      GUARD
+sched.yield.n256           kcyc_per_switch                    4164.7     6644.0   +59.53    48.65 HIGHER    
+sched.yield.n256           l1miss_per_switch                   129.1      169.4   +31.14     9.55 HIGHER    
+
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS/PASS PASS
+
+VERDICT pt-epoll: REGRESSES
+  - sched.yield.n256 kcyc_per_switch: worse beyond spread (cross-area, not a target/guard of this patch: re-run to confirm before acting)
+  - sched.yield.n256 l1miss_per_switch: worse beyond spread (cross-area, not a target/guard of this patch: re-run to confirm before acting)
+
+====================================================================================================
+PATCH pt-all   variant boots: 2   adjacent baseline boots: 3   baseline boots in window: 9
+  variant  20260923-161750  patchtest-7.3.0-rc3-kbench-pt-all-00836-g3368e517e2d4-20260923-161750
+  variant  20260923-163419  patchtest-7.3.0-rc3-kbench-pt-all-00836-g3368e517e2d4-20260923-163419
+  baseline 20260923-160446  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-160446
+  baseline 20260923-162835  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-162835
+  baseline 20260923-165011  patchtest-7.3.0-rc3-kbench-baseline-00824-g518e5b794c06-20260923-165011
+RULE: all kept patches together: overall non-regression. REGRESSES if any guard of any patch, or any decisive metric anywhere, gets worse beyond spread; FUNC FAIL on any FUNC check that passes on baseline. Improvements are listed.
+DIFFERENCE TEST: |delta| > max(baseline spread over all baseline boots, resolution floor (0.2% for instruction/call counts, 1% for cycles, L1 misses, hrtimer/softirq, ping), rule threshold) AND every variant boot outside the adjacent-baseline [min,max] on the same side; *_info metrics never decide.
+IDENTITY: OK
+
+test                       metric                           baseline    variant   delta% bspread% diff      role
+client.epoll.multi4        kcyc_per_callback                  1437.8     1485.1    +3.29    61.59 same      TARGET
+client.epoll.multi4        l1miss_per_callback                 8.005      7.418    -7.33    45.86 same      TARGET
+client.epoll.single        kcyc_per_op                        1284.4     1522.6   +18.55    41.84 same      GUARD
+client.epoll.single        kinsn_per_op                       3149.4     3177.2    +0.88     3.16 same      GUARD
+client.epoll.single        l1miss_per_op                      0.9537      3.136  +228.77   158.65 same      GUARD
+client.udp.epoll.s1        epcb_per_dgram                          1          1    +0.02     0.02 same      GUARD
+client.udp.epoll.s1        sock_def_readable_per_dgram             1          0  -100.00     0.00 LOWER     
+client.udp.epoll.s12       enqueue_per_dgram                       1      1.501   +50.11    45.51 HIGHER    
+client.udp.epoll.s12       epcb_per_dgram                          1      0.468   -53.20     0.00 LOWER     TARGET
+client.udp.epoll.s12       sock_def_readable_per_dgram             1          0  -100.00     0.00 LOWER     
+client.udp.epoll.s6        epcb_per_dgram                          1     0.8708   -12.92     0.00 LOWER     TARGET
+client.udp.epoll.s6        sock_def_readable_per_dgram             1          0  -100.00     0.00 LOWER     
+client.udp.s1              kinsn_per_dgram                    9402.4     9509.0    +1.13    12.47 same      GUARD
+net.bridge.arpflood        kinsn_per_frame                   20179.1    20147.3    -0.16     2.82 same      TARGET
+net.ct.flush               kinsn_per_entry                    1909.0     1332.1   -30.22     1.63 LOWER     TARGET
+net.ct.newflow             kinsn_per_pkt                     16924.7    16927.0    +0.01     2.05 same      TARGET
+net.ct.stream              kinsn_per_pkt                     14582.4    14836.4    +1.74     3.84 same      TARGET
+sched.pingpong.cross       kcyc_per_switch                   93446.0    57425.0   -38.55   209.11 same      GUARD
+sched.pingpong.cross       l1miss_per_switch                  1070.7      733.5   -31.49   133.30 same      GUARD
+sched.pingpong.same        kcyc_per_switch                    5784.2     5641.4    -2.47    77.24 same      GUARD
+sched.pingpong.same        l1miss_per_switch                   53.06      50.47    -4.87    99.29 same      GUARD
+sched.yield.n128           kcyc_per_switch                    3903.9     3854.3    -1.27    68.42 same      GUARD
+sched.yield.n128           l1miss_per_switch                   123.5      123.1    -0.34    22.56 same      TARGET
+sched.yield.n2             l1miss_per_switch                   16.78      13.28   -20.84   112.71 same      GUARD
+sched.yield.n256           kcyc_per_switch                    4201.8     3934.3    -6.37    48.65 same      GUARD
+sched.yield.n256           l1miss_per_switch                   131.6      129.5    -1.57     9.55 same      TARGET
+sched.yield.n512           kcyc_per_switch                    5417.9     4866.2   -10.18    80.07 same      GUARD
+sched.yield.n512           l1miss_per_switch                   146.2      142.0    -2.92     8.14 same      TARGET
+vfs.enoent.ext4            kinsn_per_op                       5612.9     4232.8   -24.59     4.41 LOWER     TARGET,GUARD
+vfs.enoent.tmpfs           kinsn_per_op                       9211.5     7573.5   -17.78     9.27 LOWER     GUARD
+vfs.lockcalls.ext4         lockref_total_per_op                    0          0    +0.00     0.00 same      TARGET
+vfs.open.ext4              kcyc_per_op                        2837.8     3229.2   +13.80    34.99 same      GUARD
+vfs.open.ext4              kinsn_per_op                       7267.2     7072.7    -2.68     4.06 same      TARGET,GUARD
+vfs.open.ext4              l1miss_per_op                       12.71      17.34   +36.44   152.60 same      GUARD
+vfs.open.tmpfs             kinsn_per_op                       7126.3     6834.5    -4.10     4.07 LOWER     TARGET,GUARD
+vfs.stat.ext4              kcyc_per_op                        1812.4     1821.4    +0.50    30.89 same      GUARD
+vfs.stat.ext4              kinsn_per_op                       4407.1     4401.1    -0.14     2.10 same      TARGET,GUARD
+vfs.stat.ext4              l1miss_per_op                       6.231      6.264    +0.53   189.84 same      GUARD
+vfs.stat.tmpfs             kinsn_per_op                       4509.0     4475.8    -0.74     2.00 same      TARGET
+vfs.storm.p1.ext4          kcyc_per_op                        2753.8     3061.7   +11.18    48.98 same      GUARD
+vfs.storm.p16.ext4         kcyc_per_op                       11926.0     6704.5   -43.78    19.60 LOWER     TARGET,GUARD
+vfs.storm.p16.ext4         l1miss_per_op                       66.56      38.85   -41.64    75.09 same      TARGET
+vfs.storm.p4.ext4          kcyc_per_op                        2630.8     2953.2   +12.26    33.36 same      GUARD
+
+FUNC client.udp.block             variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC kernel.dmesg                 variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC net.bridge.proxyarp          variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC net.cake.s100us.set          variant PASS/PASS        baseline SKIP/SKIP/SKIP   PASS
+FUNC net.cake.s10us.set           variant PASS/PASS        baseline SKIP/SKIP/SKIP   PASS
+FUNC net.cake.s50us.set           variant PASS/PASS        baseline SKIP/SKIP/SKIP   PASS
+FUNC net.cake.slack-attr          variant PASS/PASS        baseline MISSING/MISSING/MISSING PASS
+FUNC net.ct.ctnetlink             variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC net.ct.hook                  variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC net.ct.resize                variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC net.ctmax.8x-silent          variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC net.ctmax.9x-logs            variant PASS/PASS        baseline SKIP/SKIP/SKIP   PASS
+FUNC net.ctmax.netns-ro           variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC openat2.emptypath_test       variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC openat2.openat2_test         variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC openat2.rename_attack_test   variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC openat2.resolve_test         variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC vfs.errpaths                 variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC vfs.errpaths-umount          variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+FUNC vfs.tmpfs-umount             variant PASS/PASS        baseline PASS/PASS/PASS   PASS
+
+VERDICT pt-all: REGRESSES
+  - client.udp.epoll.s12 enqueue_per_dgram: worse beyond spread (cross-area, not a target/guard of this patch: re-run to confirm before acting)
+  - other metrics lower beyond spread (not claimed by this patch): client.udp.epoll.s1 sock_def_readable_per_dgram, client.udp.epoll.s12 sock_def_readable_per_dgram, client.udp.epoll.s6 sock_def_readable_per_dgram

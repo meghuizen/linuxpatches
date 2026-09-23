@@ -1,0 +1,63 @@
+host kernel: 6.18.40.1-microsoft-standard-WSL2
+epoll senders=1 secs=3.0 sent=27070 got=27070 rcvbuf_errors=0 epoll_waits=10603 dgram/wait=2.6
+Attached 5 probes
+
+
+@enq: 27071
+@epcb_per_enqueue:
+[0]                    1 |                                                    |
+[1]                27070 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@epcb_total: 27070
+@ready_per_enqueue:
+[1]                27071 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+
+@ready_total: 27071
+epoll senders=2 secs=3.0 sent=87270 got=87270 rcvbuf_errors=0 epoll_waits=20085 dgram/wait=4.3
+Attached 5 probes
+
+
+@enq: 87270
+@epcb_per_enqueue:
+[0]                  658 |                                                    |
+[1]                85996 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[2, 4)               605 |                                                    |
+[4, 8)                10 |                                                    |
+[8, 16)                1 |                                                    |
+
+@epcb_total: 87270
+@ready_per_enqueue:
+[0]                  658 |                                                    |
+[1]                85996 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[2, 4)               605 |                                                    |
+[4, 8)                10 |                                                    |
+[8, 16)                1 |                                                    |
+
+@ready_total: 87270
+epoll senders=6 secs=3.0 sent=310765 got=310765 rcvbuf_errors=0 epoll_waits=8461 dgram/wait=36.7
+Attached 5 probes
+
+
+@enq: 310765
+@epcb_per_enqueue:
+[0]                17916 |@@@                                                 |
+[1]               279433 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[2, 4)             13025 |@@                                                  |
+[4, 8)                96 |                                                    |
+[8, 16)              223 |                                                    |
+[16, 32)              61 |                                                    |
+[32, 64)              11 |                                                    |
+
+@epcb_total: 310765
+@ready_per_enqueue:
+[0]                17916 |@@@                                                 |
+[1]               279433 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[2, 4)             13025 |@@                                                  |
+[4, 8)                96 |                                                    |
+[8, 16)              223 |                                                    |
+[16, 32)              61 |                                                    |
+[32, 64)              11 |                                                    |
+
+@ready_total: 310765
+block senders=6 receivers=4 secs=3.6 sent=137024 got=137024 rcvbuf_errors=0 unaccounted=0 late_wakeups=0 per_rx=35643,33255,34466,33660
+block senders=2 receivers=4 secs=3.6 sent=25375 got=25375 rcvbuf_errors=0 unaccounted=0 late_wakeups=0 per_rx=6272,6313,6363,6427

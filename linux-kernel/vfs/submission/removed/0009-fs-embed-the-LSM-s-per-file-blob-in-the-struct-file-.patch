@@ -1,0 +1,257 @@
+From f6ec830edc4eff75ffa788f5f735e081a5192497 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:29:22 +0200
+Subject: [PATCH] fs: embed the LSM's per-file blob in the struct file
+ allocation
+
+On a kernel with an LSM that keeps per-file state - SELinux, AppArmor,
+Landlock, i.e. every distribution kernel - each open() performs two slab
+allocations, not one: alloc_empty_file() takes the struct file from
+filp_cache and security_file_alloc() takes the LSM blob from
+lsm_file_cache, and each close() frees both. The second allocation is
+never optional, is never larger than a few dozen bytes (SELinux: 16,
+AppArmor: 24), and is reached from every LSM hook on the file through
+a pointer chase to a line that has nothing else the file needs.
+
+Allocate the blob as the tail of the same object instead. files_init()
+runs after security_init(), so blob_sizes.lbs_file is final when the
+filp and bfilp caches are created; each is sized sizeof(struct) plus
+the blob, and init_file() points f_security at the tail before calling
+security_file_alloc(), which now only zeroes it. security_file_free()
+no longer frees anything. lsm_file_cache goes away.
+
+Memory is neutral or better. filp_cache is SLAB_HWCACHE_ALIGN, so a
+176-byte struct file already occupies a 192-byte slot: with SELinux the
+16-byte blob fits in the padding and the separate 16-byte allocation
+disappears outright. With larger blobs the object grows to the next
+64-byte multiple, which is the same size the two objects took together
+in their respective caches. The blob is now charged to the memcg with
+the file, as it arguably always should have been.
+
+What this saves per open/close: one kmem_cache_zalloc() and one
+kmem_cache_free() with their percpu cmpxchg fast paths, and on every
+LSM file hook after that, the miss on the separate blob line. Nothing
+changes for kernels without CONFIG_SECURITY or with no LSM asking for
+per-file state: security_file_blob_size() is 0, f_security stays NULL.
+
+backing_file has its own second blob for the user-visible file
+(lsm_backing_file_cache); that one is untouched.
+---
+ fs/file_table.c          | 41 ++++++++++++++++++++++++++++++++++------
+ include/linux/security.h |  6 ++++++
+ security/lsm.h           |  1 -
+ security/lsm_init.c      |  5 +----
+ security/security.c      | 38 ++++++++++++++++++++-----------------
+ 5 files changed, 63 insertions(+), 28 deletions(-)
+
+diff --git a/fs/file_table.c b/fs/file_table.c
+index c68b8c0a4097..b9decab94b40 100644
+--- a/fs/file_table.c
++++ b/fs/file_table.c
+@@ -176,11 +176,31 @@ static int __init init_fs_stat_sysctls(void)
+ fs_initcall(init_fs_stat_sysctls);
+ #endif
+ 
+-static int init_file(struct file *f, int flags, const struct cred *cred)
++/*
++ * The LSM's per-file blob is the tail of the same slab object as the struct
++ * file (or the struct backing_file); files_init() sized the caches for it.
++ * One allocation per open instead of two, and the blob on the file's own
++ * cachelines rather than a pointer chase away.
++ */
++static inline void *file_lsm_blob(void *obj, size_t obj_size)
++{
++	return security_file_blob_size() ? obj + obj_size : NULL;
++}
++
++static inline void file_set_lsm_blob(struct file *f, void *blob)
++{
++#ifdef CONFIG_SECURITY
++	f->f_security = blob;
++#endif
++}
++
++static int init_file(struct file *f, int flags, const struct cred *cred,
++		     void *lsm_blob)
+ {
+ 	int error;
+ 
+ 	f->f_cred = get_cred(cred);
++	file_set_lsm_blob(f, lsm_blob);
+ 	error = security_file_alloc(f);
+ 	if (unlikely(error)) {
+ 		put_cred(f->f_cred);
+@@ -263,7 +283,7 @@ struct file *alloc_empty_file(int flags, const struct cred *cred)
+ 	if (unlikely(!f))
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	error = init_file(f, flags, cred);
++	error = init_file(f, flags, cred, file_lsm_blob(f, sizeof(*f)));
+ 	if (unlikely(error)) {
+ 		kmem_cache_free(filp_cache, f);
+ 		return ERR_PTR(error);
+@@ -297,7 +317,7 @@ struct file *alloc_empty_file_noaccount(int flags, const struct cred *cred)
+ 	if (unlikely(!f))
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	error = init_file(f, flags, cred);
++	error = init_file(f, flags, cred, file_lsm_blob(f, sizeof(*f)));
+ 	if (unlikely(error)) {
+ 		kmem_cache_free(filp_cache, f);
+ 		return ERR_PTR(error);
+@@ -333,7 +353,8 @@ struct file *alloc_empty_backing_file(int flags, const struct cred *cred,
+ 	if (unlikely(!ff))
+ 		return ERR_PTR(-ENOMEM);
+ 
+-	error = init_file(&ff->file, flags, cred);
++	error = init_file(&ff->file, flags, cred,
++			  file_lsm_blob(ff, sizeof(*ff)));
+ 	if (unlikely(error)) {
+ 		kmem_cache_free(bfilp_cache, ff);
+ 		return ERR_PTR(error);
+@@ -636,13 +657,21 @@ void __init files_init(void)
+ 		.freeptr_offset = offsetof(struct file, f_freeptr),
+ 	};
+ 
+-	__filp_cache = kmem_cache_create("filp", sizeof(struct file), &args,
++	/*
++	 * The LSM blob is carved out of the same object, behind the struct;
++	 * security_init() has run by now, so the size is final. Both structs
++	 * are a multiple of the pointer size, which is all a blob asks for.
++	 */
++	unsigned int lsm = security_file_blob_size();
++
++	__filp_cache = kmem_cache_create("filp", sizeof(struct file) + lsm, &args,
+ 				SLAB_HWCACHE_ALIGN | SLAB_PANIC |
+ 				SLAB_ACCOUNT | SLAB_TYPESAFE_BY_RCU);
+ 	runtime_const_init(ptr, __filp_cache);
+ 
+ 	args.freeptr_offset = offsetof(struct backing_file, bf_freeptr);
+-	__bfilp_cache = kmem_cache_create("bfilp", sizeof(struct backing_file),
++	__bfilp_cache = kmem_cache_create("bfilp",
++				sizeof(struct backing_file) + lsm,
+ 				&args, SLAB_HWCACHE_ALIGN | SLAB_PANIC |
+ 				SLAB_ACCOUNT | SLAB_TYPESAFE_BY_RCU);
+ 	runtime_const_init(ptr, __bfilp_cache);
+diff --git a/include/linux/security.h b/include/linux/security.h
+index 93a2400fc638..92676b53498a 100644
+--- a/include/linux/security.h
++++ b/include/linux/security.h
+@@ -470,6 +470,7 @@ int security_inode_setintegrity(const struct inode *inode,
+ int security_kernfs_init_security(struct kernfs_node *kn_dir,
+ 				  struct kernfs_node *kn);
+ int security_file_permission(struct file *file, int mask);
++unsigned int security_file_blob_size(void);
+ int security_file_alloc(struct file *file);
+ void security_file_release(struct file *file);
+ void security_file_free(struct file *file);
+@@ -1143,6 +1144,11 @@ static inline int security_file_permission(struct file *file, int mask)
+ 	return 0;
+ }
+ 
++static inline unsigned int security_file_blob_size(void)
++{
++	return 0;
++}
++
+ static inline int security_file_alloc(struct file *file)
+ {
+ 	return 0;
+diff --git a/security/lsm.h b/security/lsm.h
+index d9a471c3d7eb..c8f1ce65fbc9 100644
+--- a/security/lsm.h
++++ b/security/lsm.h
+@@ -31,7 +31,6 @@ extern struct lsm_blob_sizes blob_sizes;
+ DECLARE_STATIC_KEY_TRUE(security_inode_getattr_rcu_ok);
+ 
+ /* LSM blob caches */
+-extern struct kmem_cache *lsm_file_cache;
+ extern struct kmem_cache *lsm_backing_file_cache;
+ extern struct kmem_cache *lsm_inode_cache;
+ 
+diff --git a/security/lsm_init.c b/security/lsm_init.c
+index 91001a2c82c6..8fbe6e0d8f12 100644
+--- a/security/lsm_init.c
++++ b/security/lsm_init.c
+@@ -478,10 +478,7 @@ int __init security_init(void)
+ 		lsm_pr("blob(bpf_token) size %d\n", blob_sizes.lbs_bpf_token);
+ 	}
+ 
+-	if (blob_sizes.lbs_file)
+-		lsm_file_cache = kmem_cache_create("lsm_file_cache",
+-						   blob_sizes.lbs_file, 0,
+-						   SLAB_PANIC, NULL);
++	/* lbs_file has no cache of its own: files_init() embeds it in struct file */
+ 	if (blob_sizes.lbs_backing_file)
+ 		lsm_backing_file_cache = kmem_cache_create(
+ 						   "lsm_backing_file_cache",
+diff --git a/security/security.c b/security/security.c
+index 7429340b197d..ea8f616a516d 100644
+--- a/security/security.c
++++ b/security/security.c
+@@ -81,7 +81,6 @@ const struct lsm_id *lsm_idlist[MAX_LSM_COUNT];
+ 
+ struct lsm_blob_sizes blob_sizes;
+ 
+-struct kmem_cache *lsm_file_cache;
+ struct kmem_cache *lsm_backing_file_cache;
+ struct kmem_cache *lsm_inode_cache;
+ 
+@@ -171,17 +170,28 @@ struct lsm_static_calls_table
+  */
+ static int lsm_file_alloc(struct file *file)
+ {
+-	if (!lsm_file_cache) {
+-		file->f_security = NULL;
+-		return 0;
+-	}
+-
+-	file->f_security = kmem_cache_zalloc(lsm_file_cache, GFP_KERNEL);
+-	if (file->f_security == NULL)
+-		return -ENOMEM;
++	/*
++	 * The blob is not a separate allocation: the VFS sizes its file slab
++	 * caches for it and points f_security at the tail of the object before
++	 * calling security_file_alloc(); see files_init() and init_file(). It
++	 * is NULL when no LSM asked for per-file state.
++	 */
++	if (blob_sizes.lbs_file)
++		memset(file->f_security, 0, blob_sizes.lbs_file);
+ 	return 0;
+ }
+ 
++/**
++ * security_file_blob_size - size of the per-file LSM blob
++ *
++ * For the VFS to size its struct file allocations; the blob lives behind the
++ * struct file in the same object and f_security points at it.
++ */
++unsigned int security_file_blob_size(void)
++{
++	return blob_sizes.lbs_file;
++}
++
+ /**
+  * lsm_backing_file_alloc - allocate a composite backing file blob
+  * @backing_file: the backing file
+@@ -2474,15 +2484,9 @@ void security_file_release(struct file *file)
+  */
+ void security_file_free(struct file *file)
+ {
+-	void *blob;
+-
+ 	call_void_hook(file_free_security, file);
+-
+-	blob = file->f_security;
+-	if (blob) {
+-		file->f_security = NULL;
+-		kmem_cache_free(lsm_file_cache, blob);
+-	}
++	/* the blob goes with the struct file; nothing to free here */
++	file->f_security = NULL;
+ }
+ 
+ /**
+-- 
+2.53.0
+

@@ -1,0 +1,99 @@
+From ba32a8a4ba20accf66b58031da3414b069305a56 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:27:44 +0200
+Subject: [PATCH nf-next 1/3] netfilter: conntrack: hash IPv4 tuples as two
+ words
+
+hash_conntrack_raw() runs siphash() over the first 39 bytes of the
+tuple on every conntrack lookup, i.e. once per packet, and again at
+confirm and in the NAT unique-tuple search.  For IPv4, 24 of those
+bytes are the two nf_inet_addr unions, of which 4 bytes each are used.
+siphash() consumes 39 bytes as four 8-byte blocks plus a tail: 14
+SipHash rounds.
+
+Pack the IPv4 addresses, ports, l3num and protonum into two u64 and use
+siphash_2u64(): 10 rounds, no loop, no tail handling.  The key is
+unchanged.  The value is only used as a bucket index and lookups still
+compare the full tuple.  IPv6 keeps the generic path.
+
+Instructions retired per call of the lib/siphash.o functions built from
+this tree, linked into a userspace loop and counted with perf stat
+(20M calls, loop overhead of 11 instructions subtracted on x86_64):
+
+                     siphash(), 39 bytes   siphash_2u64()
+  x86_64                     256                164
+  i386 (not subtracted)      986                627
+
+Packing the words adds 12 instructions to hash_conntrack_raw() on
+x86_64 against 2 for the generic call, and about 24 against 3 on i386
+(objdump of nf_conntrack_core.o).  Net per IPv4 hash: about -80
+instructions on x86_64 and -330 on i386.  IPv6 gains a compare and a
+not-taken branch.  Wall-clock was not measured.
+
+In the built kernel (x86_64, same config) the IPv4 path of
+hash_conntrack_raw() calls siphash_2u64() (165 instructions, no loop)
+instead of __siphash_unaligned(); hash_conntrack_raw() grows from 54 to
+70 instructions for the packing.
+
+Runtime, x86_64 guest (nested KVM, 16 vCPUs), kernel instructions per
+packet forwarded through a netns router with conntrack (perf stat
+instructions:k), patches 1-3 against the base commit, booted
+interleaved: 2 boots with the series, 7 base boots:
+
+                         base, median (range)     patches 1-3
+  new flow, per packet   16845 (16835-17180)      16684, 16688
+  established stream     14422 (14330-14884)      14299, 14322
+
+The new-flow change, about -155, is two IPv4 hashes; patch 2 only runs
+at deletion and patch 3 is not on the packet path.  The expected -80
+per established-stream packet is inside the per-boot spread.
+
+Tested: nf_conntrack_core.o builds without warnings (W=1) on x86_64 and
+i386 at this commit; the runtime run above.
+
+Assisted-by: Claude perf
+---
+Impact: medium -- IPv4 conntrack lookup (once per packet through
+conntrack) and flow setup, on routers and hosts with conntrack loaded.
+Instruction counts only (static, userspace and in-kernel);
+no wall-clock measurement.
+
+- The harness (available on request) links the siphash functions
+  compiled from this tree into a userspace loop, so the counted code is
+  the kernel's own.
+- Static counts from a userspace copy of the primitives (GCC 15.2 -O2,
+  straight-line, not measured on hardware): Cortex-A53 177 -> 128,
+  rv64gc 411 -> 297, rv64gc_zbb 245 -> 179.
+- siphash() is the 64-bit SipHash on every architecture (only hsiphash()
+  switches to HalfSipHash on 32-bit), which is why i386 gains most.
+- IPv6 pays one compare and branch more than before.
+
+ net/netfilter/nf_conntrack_core.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/net/netfilter/nf_conntrack_core.c b/net/netfilter/nf_conntrack_core.c
+index d0d9e5ea84a0..24b3f2b58227 100644
+--- a/net/netfilter/nf_conntrack_core.c
++++ b/net/netfilter/nf_conntrack_core.c
+@@ -220,6 +220,18 @@ static u32 hash_conntrack_raw(const struct nf_conntrack_tuple *tuple,
+ 	key.key[0] ^= zoneid;
+ 	key.key[1] ^= net_hash_mix(net);
+ 
++	/* An IPv4 tuple fits in two words.  Hashing those takes 10 SipHash
++	 * rounds; the generic 39-byte form below takes 14.
++	 */
++	if (tuple->src.l3num == AF_INET)
++		return siphash_2u64((u64)tuple->src.u3.ip << 32 |
++					    tuple->dst.u3.ip,
++				    (u64)tuple->src.u.all << 48 |
++					    (u64)tuple->dst.u.all << 32 |
++					    (u64)tuple->src.l3num << 8 |
++					    tuple->dst.protonum,
++				    &key);
++
+ 	return siphash((void *)tuple,
+ 			offsetofend(struct nf_conntrack_tuple, dst.__nfct_hash_offsetend),
+ 			&key);
+-- 
+2.53.0
+

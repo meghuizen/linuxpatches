@@ -1,0 +1,46 @@
+========================================================================
+PATCH A -- wake_entry must not straddle a cacheline boundary
+========================================================================
+  before: wake_entry @56 size 16 -> lines 0..1
+  after : wake_entry @56 size 16 -> lines 0..1
+  [PASS] the straddle this patch targets existed before
+  [FAIL] wake_entry is now within one cacheline
+
+  false sharing: wake_entry is written by the WAKER's CPU.
+  Nothing the RUNNING CPU writes every switch may share its line.
+  [FAIL] no locally-written hot field on wake_entry's line   line 0; collisions: ['on_rq', 'on_cpu', 'is_blocked']
+  [INFO] before, wake_entry's first line held: ['on_rq', 'on_cpu', 'is_blocked'] (this is what the patch removes)
+
+  cpus_ptr moved onto the line it now shares. It must be
+  read-mostly: an affinity change writes it, nothing else.
+  [FAIL] cpus_ptr shares the line the waker already reads (on_cpu/on_rq)   cpus_ptr line 21, on_cpu line 0
+
+========================================================================
+PATCH C -- EEVDF fields on one line; avg still isolated
+========================================================================
+    run_node       @  32 (line 0)  ->  @   0 (line 0)
+    deadline       @  56 (line 0)  ->  @  24 (line 0)
+    vruntime       @ 136 (line 2)  ->  @  32 (line 0)
+    min_vruntime   @  64 (line 1)  ->  @  40 (line 0)
+    vlag           @ 144 (line 2)  ->  @  48 (line 0)
+    slice          @ 160 (line 2)  ->  @  56 (line 0)
+  [PASS] all six EEVDF pick fields share one cacheline   lines [0, 1, 2] -> [0]
+  [PASS] that is fewer lines than before   3 -> 1
+  [PASS] sched_entity did not grow   256 -> 256
+
+  false sharing: avg is updated by PELT from whichever CPU last
+  ran the entity. It must keep a line to itself.
+  [PASS] avg is cacheline aligned   offset 192
+  [PASS] no other member shares avg's line   line 3; sharers: none
+
+  h_load is written by the load balancer, potentially from a
+  remote CPU. It must not sit on the pick line.
+    h_load @16 (line 0)  ->  @80 (line 1)
+  [PASS] h_load is off the EEVDF pick line   h_load line 1, pick line 0
+
+========================================================================
+7/10 checks passed
+FAILED:
+  - wake_entry is now within one cacheline
+  - no locally-written hot field on wake_entry's line
+  - cpus_ptr shares the line the waker already reads (on_cpu/on_rq)

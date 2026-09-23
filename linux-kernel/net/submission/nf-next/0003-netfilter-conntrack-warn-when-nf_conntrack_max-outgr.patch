@@ -1,0 +1,118 @@
+From 306c593487f7cae56f69ab767f02dc0e0a4cbac1 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:27:48 +0200
+Subject: [PATCH nf-next 3/3] netfilter: conntrack: warn when
+ nf_conntrack_max outgrows the hash table
+
+Raising nf_conntrack_max does not resize the hash table.  Each entry is
+on two chains, so a full table has an average chain length of
+2 * nf_conntrack_max / nf_conntrack_buckets, and __nf_conntrack_confirm()
+walks both chains of every new entry with nf_ct_key_equal() before
+inserting it.  Once a chain is longer than MIN_CHAINLEN (50) plus a
+random margin, the insert fails with chaintoolong and the packet is
+dropped.  nf_conntrack_init_start() never picks a ratio above 8 (8 when
+the hash size is given, 1 otherwise), but the sysctl accepts any value
+and the documentation does not say that the table stays the same size.
+
+Log a rate-limited warning when nf_conntrack_max is set to more than 8
+times nf_conntrack_buckets, and document that raising nf_conntrack_max
+alone lengthens the hash chains.
+
+No measurement of the chain walk cost is included; this patch only
+reports a configuration the kernel does not choose itself.
+
+Generated code: one new sysctl handler of 34 instructions, reached only
+on writes to nf_conntrack_max.  No packet-path function is changed.
+
+Tested: nf_conntrack_standalone.o builds without warnings (W=1) on
+x86_64.  In an x86_64 guest (2 boots): setting nf_conntrack_max to 8x
+the bucket count logs nothing, 9x logs one warning, and a write from a
+non-init netns is refused as before.
+
+Assisted-by: Claude
+---
+Impact: low -- diagnostic only, for systems where nf_conntrack_max was
+raised without nf_conntrack_buckets.
+
+- Question for the maintainers: is a warning in the sysctl handler
+  wanted, or only the documentation hunk?  Either stands alone.
+- The threshold is the max_factor nf_conntrack_init_start() uses when a
+  hash size is given.  nf_conntrack_max is global and read-only outside
+  init_net, so other namespaces cannot trigger the message.
+- No measurement of the chain walk cost is offered.
+
+ .../networking/nf_conntrack-sysctl.rst        |  5 ++++
+ net/netfilter/nf_conntrack_standalone.c       | 27 +++++++++++++++++--
+ 2 files changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/networking/nf_conntrack-sysctl.rst b/Documentation/networking/nf_conntrack-sysctl.rst
+index 35f889259fcd..774efa870e7a 100644
+--- a/Documentation/networking/nf_conntrack-sysctl.rst
++++ b/Documentation/networking/nf_conntrack-sysctl.rst
+@@ -98,6 +98,11 @@ nf_conntrack_max - INTEGER
+         for the original direction and once for the reply direction (i.e., with
+         the reversed address). This means that with default settings a maxed-out
+         table will have a average hash chain length of 2, not 1.
++        Changing nf_conntrack_max does not resize the hash table: raising it
++        alone lengthens the hash chains in proportion, and every new
++        connection walks two of them. Raise nf_conntrack_buckets with it. A
++        warning is logged when nf_conntrack_max is set to more than 8 times
++        nf_conntrack_buckets.
+ 
+ nf_conntrack_tcp_be_liberal - BOOLEAN
+ 	- 0 - disabled (default)
+diff --git a/net/netfilter/nf_conntrack_standalone.c b/net/netfilter/nf_conntrack_standalone.c
+index f4f2d82192d5..2b4831d409cf 100644
+--- a/net/netfilter/nf_conntrack_standalone.c
++++ b/net/netfilter/nf_conntrack_standalone.c
+@@ -536,6 +536,29 @@ EXPORT_SYMBOL_GPL(nf_conntrack_count);
+ /* size the user *wants to set */
+ static unsigned int nf_conntrack_htable_size_user __read_mostly;
+ 
++/* Setting nf_conntrack_max does not resize the hash table.  Warn when it
++ * exceeds the largest max/buckets factor the kernel picks by itself.
++ */
++#define NF_CT_MAX_FACTOR_WARN 8
++
++static int
++nf_conntrack_max_sysctl(const struct ctl_table *table, int write,
++			void *buffer, size_t *lenp, loff_t *ppos)
++{
++	unsigned int hsize;
++	int ret;
++
++	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
++	if (ret || !write)
++		return ret;
++
++	hsize = READ_ONCE(nf_conntrack_htable_size);
++	if (hsize && (u64)nf_conntrack_max > (u64)NF_CT_MAX_FACTOR_WARN * hsize)
++		pr_warn_ratelimited("nf_conntrack: nf_conntrack_max (%u) is more than %u times nf_conntrack_buckets (%u), consider raising nf_conntrack_buckets\n",
++				    nf_conntrack_max, NF_CT_MAX_FACTOR_WARN, hsize);
++	return 0;
++}
++
+ static int
+ nf_conntrack_hash_sysctl(const struct ctl_table *table, int write,
+ 			 void *buffer, size_t *lenp, loff_t *ppos)
+@@ -645,7 +668,7 @@ static const struct ctl_table nf_ct_sysctl_table[] = {
+ 		.data		= &nf_conntrack_max,
+ 		.maxlen		= sizeof(int),
+ 		.mode		= 0644,
+-		.proc_handler	= proc_dointvec_minmax,
++		.proc_handler	= nf_conntrack_max_sysctl,
+ 		.extra1		= SYSCTL_ONE,
+ 		.extra2		= SYSCTL_INT_MAX,
+ 	},
+@@ -926,7 +949,7 @@ static struct ctl_table nf_ct_netfilter_table[] = {
+ 		.data		= &nf_conntrack_max,
+ 		.maxlen		= sizeof(int),
+ 		.mode		= 0644,
+-		.proc_handler	= proc_dointvec_minmax,
++		.proc_handler	= nf_conntrack_max_sysctl,
+ 		.extra1		= SYSCTL_ONE,
+ 		.extra2		= SYSCTL_INT_MAX,
+ 	},
+-- 
+2.53.0
+

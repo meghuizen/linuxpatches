@@ -1,0 +1,71 @@
+Layout facts used in REVIEW.md for sub-vfs-orig patches 9, 12, 13, 14.
+Source: pahole v1.31 (-F btf) on /usr/src/kbench/builds/baseline/vmlinux
+(518e5b794c06, x86-64), and the slab cache flags in the tree.
+
+struct inode (baseline): size 560; i_count@328 i_readcount@340 i_fop@344
+  i_flctx@352 i_data@360; stat-read fields span i_mode@0 .. i_blocks@136+8.
+
+Where struct inode actually lives:
+  ext4_inode_info  size 1040, vfs_inode @232, cache flags
+                   SLAB_RECLAIM_ACCOUNT|SLAB_ACCOUNT (no HWCACHE_ALIGN)
+  shmem_inode_info size 688,  vfs_inode @128, SLAB_PANIC|SLAB_ACCOUNT
+  inode_cache      size 560,  no SLAB_HWCACHE_ALIGN (fs/inode.c:2672)
+  xfs_inode        SLAB_HWCACHE_ALIGN, but i_vnode at a nonzero offset
+  btrfs_inode      no HWCACHE_ALIGN
+
+ext4: objects are 1040 = 16*65 bytes apart, so object starts mod 64 cycle
+  over {0,16,32,48}; vfs_inode start mod 64 = {40,56,8,24}. With patch 13,
+  i_data (@384 in struct inode) starts at absolute offset mod 64 in
+  {40,56,8,24}: never on a cacheline boundary.
+shmem (tmpfs, used by every tree-bench run): 688 mod 64 = 48, vfs_inode
+  start mod 64 in {0,48,32,16}; i_data aligned for 1 object in 4.
+
+Patch 12 (i_fop/i_flctx to @64/@72) shifts i_ino..i_version by +16, so the
+  stat span becomes 0..160 instead of 0..144. For an inode starting at
+  a (mod 64): lines(0..144) = ceil((a+144)/64), lines(0..160) = ceil((a+160)/64);
+  these differ for a in {40,48} (8-byte steps) -> for ext4 (a in
+  {40,56,8,24}) one inode in four needs one more cacheline for a stat-type
+  read; for tmpfs (a in {0,48,32,16}) also one in four.
+  On open, the i_readcount line (still written: i_readcount_inc with
+  CONFIG_FILE_LOCKING) and i_data.host (read by file_ra_state_init) stay
+  where they were, so the old line is still touched on open.
+
+struct file: size 176, filp cache SLAB_HWCACHE_ALIGN -> 192-byte slot.
+struct backing_file: 200 -> 256.
+Per-LSM lbs_file: selinux file_security_struct 16, apparmor aa_file_ctx 24,
+  smack 8, landlock landlock_file_security (>= 16).
+Patch 9 embedding: 176+16 = 192 (SELinux alone: saves the 16-byte object);
+  176+24 = 200 -> 256 (AppArmor: 192+24=216 before, 256 after, +40 bytes);
+  any blob > 16 bytes grows every open file by up to 64 - blob bytes.
+
+Correction and follow-up (second pass, pahole on this tree's own objects:
+build/fs/inode.o, build/fs/ext4/super.o, build/mm/shmem.o at 518e5b794c06):
+
+- ext4_inode_info: 1040 bytes, vfs_inode @232, freeptr_offset set, so the
+  slab stride is 1040 and vfs_inode starts at {40,56,8,24} mod 64 (as above).
+- shmem_inode_info: 688 bytes, vfs_inode @128, but the cache has a ctor
+  (shmem_init_inode) and no freeptr_offset, so SLUB stores the free
+  pointer after the object (mm/slub.c calculate_sizes) and the stride is
+  696. 696 mod 64 = 56, so tmpfs inodes start at EVERY multiple of 8 mod
+  64, not only {0,48,32,16}. The same holds for inode_cache (ctor
+  init_once, stride 568). Every start offset a in {0,8,...,56} therefore
+  occurs in practice; ext4 and tmpfs alone cover all eight.
+
+Patch 12 placement search: inode-layout/inode-placement.py, output in
+inode-layout/model-output.txt. It moves one block (the four counters,
+i_readcount+i_writecount, i_readcount alone, or i_fop+i_flctx) to every
+position between top-level members, and for each a checks: no extra
+stat line, no extra open/close line, and i_readcount on a line with no
+field that open, stat, the walk or read(2) read (incl. i_acl, read by
+no_acl_inode() on every permission check, and i_data.host/i_pages).
+Result: no placement meets all three at all eight offsets. Placements
+that separate i_readcount at every offset exist (13 for the counter
+block), but each costs one more line per open at 7 of 8 offsets; every
+placement with no extra line separates it only at a=40, where the base
+layout already does. The reason is structural: open touches the
+i_readcount line anyway, so i_readcount can only avoid an extra line by
+sharing it with something open reads.
+The original patch 12 in the same model: stat +1 line at a=40,48, open
++1 line at a=0,56, and i_readcount still shares a line with i_data.host/
+i_pages at 7 of 8 offsets (separated only at a=24; it loses the
+separation base has at a=40).

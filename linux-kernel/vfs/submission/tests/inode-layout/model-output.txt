@@ -1,0 +1,65 @@
+base size 560
+a   stat open separated
+ 0     3    3 False
+ 8     3    4 False
+16     3    4 False
+24     3    5 False
+32     3    5 False
+40     3    6 True
+48     3    5 False
+56     4    4 False
+
+layouts meeting R1+R2+R3 for all 8 offsets: 0
+
+per block: placements separating i_readcount at all 8 offsets, and the fewest extra open lines among them (summed over a):
+  counters                13 placements; best: after dirtied_when: extra open lines 7, extra stat lines 0
+      a= 0 stat 3->3 open 3->4
+      a= 8 stat 3->3 open 4->5
+      a=16 stat 3->3 open 4->5
+      a=24 stat 3->3 open 5->6
+      a=32 stat 3->3 open 5->6
+      a=40 stat 3->3 open 6->6
+      a=48 stat 3->3 open 5->6
+      a=56 stat 4->4 open 4->5
+  readcount+writecount    12 placements; best: after dirtied_time_when: extra open lines 7, extra stat lines 0
+      a= 0 stat 3->3 open 3->4
+      a= 8 stat 3->3 open 4->5
+      a=16 stat 3->3 open 4->5
+      a=24 stat 3->3 open 5->6
+      a=32 stat 3->3 open 5->6
+      a=40 stat 3->3 open 6->6
+      a=48 stat 3->3 open 5->6
+      a=56 stat 4->4 open 4->5
+  readcount                2 placements; best: after i_pipe|i_cdev|i_link|i_dir_seq: extra open lines 7, extra stat lines 0
+      a= 0 stat 3->3 open 3->4
+      a= 8 stat 3->3 open 4->5
+      a=16 stat 3->3 open 4->5
+      a=24 stat 3->3 open 5->6
+      a=32 stat 3->3 open 5->6
+      a=40 stat 3->3 open 6->6
+      a=48 stat 3->3 open 5->6
+      a=56 stat 4->4 open 4->5
+  fop+flctx              none
+
+per block: placements with no extra stat or open line at any offset, and how many offsets they separate:
+  counters                 1 placements; max offsets separated: 1
+      after i_sequence: separated at a in [40]
+  readcount+writecount     4 placements; max offsets separated: 1
+      after i_count: separated at a in [40]
+      after i_dio_count: separated at a in [40]
+  readcount                2 placements; max offsets separated: 1
+      after i_dio_count: separated at a in [40]
+      after i_writecount: separated at a in [40]
+  fop+flctx                2 placements; max offsets separated: 1
+      after i_readcount: separated at a in [40]
+
+inode-p12.pahole vs inode-base.pahole:
+a   stat      open      i_readcount separated
+ 0  3->3      3->4      False->False
+ 8  3->3      4->4      False->False
+16  3->3      4->4      False->False
+24  3->3      5->5      False->True
+32  3->3      5->4      False->False
+40  3->4      6->5      True->False
+48  3->4      5->5      False->False
+56  4->4      4->5      False->False

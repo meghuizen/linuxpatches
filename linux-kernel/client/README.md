@@ -1,11 +1,33 @@
 # Client patches — the outbound path
 
-Three patches against **Linux 7.3-rc3**, for the side that calls `socket()`,
-`connect()` and `recvmsg()`: a browser, a JS runtime, `curl`, `wget`. Not
+Three patches were written against Linux 7.3-rc3 (518e5b794c06), for the
+side that calls `socket()`, `connect()` and `recvmsg()`: a browser, a JS runtime, `curl`, `wget`. Not
 the forwarding path — see [`../net/`](../net/README.md) for that — and not a
 server accepting connections.
 
 Generic kernel code only. Nothing device- or driver-specific.
+
+## Status
+
+Going upstream: patch 1 only, in [`submission/netdev/`](submission/netdev/)
+as `[PATCH net-next 0/1]`, base v7.3-rc3 (518e5b794c06). Measured alone in a
+nested KVM guest (see [`../SUBMISSION-STATUS.md`](../SUBMISSION-STATUS.md)):
+
+| patch | measured result |
+|---|---|
+| udp: wake a drained batch of datagrams with one sk_data_ready call | epoll callbacks per datagram 1.00 -> 0.87-0.91 with 6 senders, 0.45-0.47 with 12, unchanged with 1; fixed-rate test (12 senders): no extra drops at equal load (30 vs 61k of 13.5M) |
+
+Not sent (reasons in [`submission/REVIEW.md`](submission/REVIEW.md)):
+
+| patch | reason | file |
+|---|---|---|
+| 3, eventpoll field layout | no measurable difference: 4-writer callback cycles -0.8% (spread 41%), L1 misses -7.8% (spread 30%) | [`submission/removed/`](submission/removed/) |
+| 2, IPv4 IP ID 0 for connected atomic datagrams | dropped before measurement: wire-visible, saving never measured, and it breaks UDP GRO merging across GSO sends | [`submission/dropped/`](submission/dropped/) |
+
+The old export in `patches/` is superseded
+([`patches/README.md`](patches/README.md)). Its version of patch 1 had a bug:
+when every skb of a batch was dropped, `nb == 0` was passed to the wakeup,
+which woke every waiter. The submission version returns for `nr <= 0`.
 
 ## The workload
 
@@ -24,7 +46,7 @@ control or retransmit to amortise that cost across a large segment.
 | 2 | `ipv4` | Skip the IP-ID atomic on connected DF datagrams |
 | 3 | `eventpoll` | Put everything `ep_poll_callback()` touches on one cacheline |
 
-**Patch 1 is the one worth reading.** Three separate analyses — of the DNS
+Patch 1 is the one being submitted. Three separate analyses — of the DNS
 resolver receive path, of the QUIC client receive path, and of the wakeup
 and epoll machinery — arrived at the same loop independently:
 
@@ -58,9 +80,9 @@ an atomic datagram and requires receivers to ignore it, and the unconnected
 path in the same function already sends zero — so this does not make such
 traffic distinguishable from other Linux traffic. It is called out here
 because "no observable change" is otherwise the rule in this repository, and
-this one is an exception.
+this one is an exception. Patch 2 was dropped (see Status).
 
-Patch 3 is a field reorder.
+Patch 3 is a field reorder. It was removed (see Status).
 
 ## Benchmarks
 
@@ -70,7 +92,7 @@ section per patch:
 | section | patch | what it reads |
 |---|---|---|
 | `client: UDP RX wakeup batching` | 1 | **`dgram/wait`** — datagrams collected per `epoll_wait` round-trip |
-| `client: UDP TX small datagrams` | 2 | send rate sweeping processes that share one socket |
+| `client: UDP TX small datagrams` | 2 | send rate sweeping processes (each child opens its own socket, and the default `IP_PMTUDISC_WANT` means patch 2's branch is never taken) |
 | `client: epoll readiness burst` | 3 | cost per ready socket, swept 1→128: the **slope** |
 
 Patch 1 changes wakeups per batch, not throughput, so its section reports
@@ -78,21 +100,25 @@ Patch 1 changes wakeups per batch, not throughput, so its section reports
 Patch 3's effect grows with burst size, so a single point says nothing and
 the section sweeps.
 
-**The patch-1 section had to be rewritten after its first smoke test.** As
+The patch-1 section had to be rewritten after its first smoke test. As
 first written it used one sender, and one sender to one receiver measured
 `dgram/wait = 1.1` on loopback -- every datagram getting its own wakeup, no
 batch ever forming, and therefore a section structurally incapable of
-observing the patch. Six concurrent senders against one socket gives
-`dgram/wait = 87.3`, which is the condition `nb > 1` the patch addresses. The
-section now sweeps sender concurrency and says in its own output that a row
-with `dgram/wait` near 1 measured nothing, whatever its rate column says.
+observing the patch. Six concurrent senders against one socket gave
+`dgram/wait = 87.3`. That was first read as the condition `nb > 1` the patch
+addresses; the later review found it is not: `dgram/wait` measures how far
+the consumer is behind, not `nb` (on the host at 6 senders, dgram/wait 36.7
+while only 4.6% of drains had nb > 1). None of the three client sections of
+`net-bench.sh` supports a claim for its patch (`submission/REVIEW.md`,
+"Existing data"). The per-patch results in Status come from the separate
+patchtest harness (epoll callbacks per datagram).
 
-## Status
+## Build checks
 
-**Compile-tested only.** Every patch builds its objects cleanly and patch 3's
-layout claim was checked with `pahole` against the built object — all five
-fields `ep_poll_callback()` touches now sit in cacheline 0, and the struct
-stays 200 bytes. Nothing has been booted or measured.
+Every patch builds its objects cleanly and patch 3's layout claim was
+checked with `pahole` against the built object — all five fields
+`ep_poll_callback()` touches sit in cacheline 0, and the struct stays 200
+bytes. Runtime results are in Status above.
 
 ## Considered and declined
 

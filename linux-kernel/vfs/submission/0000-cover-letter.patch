@@ -1,0 +1,86 @@
+From 1b44433312924146bd3ba10659e547c3ca6af7ce Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 12:16:59 +0200
+Subject: [RFC PATCH 0/3] fs: less work per open()
+
+An open() of an existing file takes a dentry reference in
+complete_walk(), takes a second one in do_dentry_open() and drops the
+first in terminate_walk(). Patch 2 hands the walk's reference to the
+file, so an open/close cycle does two lockref operations on the dentry
+instead of four; this matters when many processes open the same file.
+Patch 3 allocates the struct file only once an open needs it, so opens
+that fail in the walk (ENOENT and friends) no longer allocate and free
+one. Patch 1 is an independent selftests Makefile fix that makes the
+openat2 tests build again; it can be taken separately.
+
+RFC because patch 2 overlaps with work Mateusz Guzik has posted (see
+below the --- line of patch 2).
+
+Measured in an x86-64 guest (nested KVM, 16 vCPUs), each patch alone on
+the base commit, 2 boots per patch interleaved with 8 base boots, perf
+stat in the guest:
+
+  #  impact                          result
+  1  low: test coverage              openat2 tests build and pass
+  2  medium: many processes opening  16 processes, one ext4 file:
+     one file                        -38% kernel cycles per open
+  3  medium: opens that fail in the  ENOENT: -22% (ext4), -13% (tmpfs)
+     walk (ENOENT)                   kernel instructions per open
+
+Neither patch 2 nor patch 3 changes the kernel instruction count of a
+successful single-process open beyond the per-boot spread (about 4%).
+
+Testing:
+- Each commit: the touched objects compile with W=1 (x86-64 config with
+  SELinux, BPF LSM, ext4; gcc 15.2), no warnings; patches 2 and 3 also
+  compile applied alone on the base commit. The three patches apply in
+  order on the base commit.
+- checkpatch --strict: clean apart from the missing Signed-off-by.
+- Runtime, per patch and all together, 2 boots each: the openat2
+  selftests (openat2_test, resolve_test, rename_attack_test,
+  emptypath_test); an error-path test (O_CREAT|O_TRUNC, O_DIRECT failing
+  after the open, EACCES from may_open(), ENOTDIR) followed by umount of
+  the ext4 and tmpfs mounts to catch a leaked reference; no kernel
+  warnings. The instruction and cycle counts in patches 2 and 3.
+- Patch 1: the four openat2 programs also build and run on a 6.18 host.
+
+Not tested:
+- Hardware other than the nested KVM guest; wall-clock throughput.
+- The file-max limit (patch 3), network filesystems and ->atomic_open()
+  users, filesystems other than ext4 and tmpfs.
+- Any architecture other than x86-64.
+- sparse/smatch (not available on the build host).
+- Full kernel build other than the tested x86-64 config; allmodconfig.
+
+Tool assistance: the changes, changelogs and measurements in this series
+were produced with Claude (Anthropic, claude-opus-5-5) as a coding
+assistant, prompted to find and fix performance problems in the VFS and
+to measure them. Each patch carries an Assisted-by tag.
+
+Suggested recipients (scripts/get_maintainer.pl --no-rolestats):
+To: Alexander Viro <viro@zeniv.linux.org.uk>
+To: Christian Brauner <brauner@kernel.org>
+Cc: Jan Kara <jack@suse.cz>
+Cc: Mateusz Guzik (patch 2 prior art; address from his lore posting)
+Cc: Shuah Khan <shuah@kernel.org> (patch 1)
+Cc: linux-fsdevel@vger.kernel.org
+Cc: linux-kselftest@vger.kernel.org
+Cc: linux-kernel@vger.kernel.org
+
+Signed-off-by: <submitter adds before sending>
+
+Michiel (3):
+  selftests: build and run the openat2 tests again
+  fs: hand the path walk's dentry reference to the opened file
+  fs: allocate the struct file for open() only when it is needed
+
+ fs/internal.h                    |  1 +
+ fs/namei.c                       | 74 +++++++++++++++++++++++++++++++---------
+ fs/open.c                        | 43 ++++++++++++++++++-----
+ tools/testing/selftests/Makefile |  2 +-
+ 4 files changed, 94 insertions(+), 26 deletions(-)
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
+-- 
+2.53.0
+

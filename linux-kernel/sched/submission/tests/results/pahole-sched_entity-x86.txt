@@ -1,0 +1,115 @@
+== base
+struct sched_entity {
+	struct load_weight         load;                 /*     0    16 */
+
+	/* XXX last struct has 4 bytes of padding */
+
+	struct load_weight         h_load;               /*    16    16 */
+
+	/* XXX last struct has 4 bytes of padding */
+
+	struct rb_node             run_node __attribute__((__aligned__(8))); /*    32    24 */
+	u64                        deadline;             /*    56     8 */
+	/* --- cacheline 1 boundary (64 bytes) --- */
+	u64                        min_vruntime;         /*    64     8 */
+	u64                        min_slice;            /*    72     8 */
+	u64                        max_slice;            /*    80     8 */
+	struct list_head           group_node;           /*    88    16 */
+	unsigned char              on_rq;                /*   104     1 */
+	unsigned char              sched_delayed;        /*   105     1 */
+	unsigned char              rel_deadline;         /*   106     1 */
+	unsigned char              custom_slice;         /*   107     1 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	u64                        exec_start;           /*   112     8 */
+	u64                        sum_exec_runtime;     /*   120     8 */
+	/* --- cacheline 2 boundary (128 bytes) --- */
+	u64                        prev_sum_exec_runtime; /*   128     8 */
+	u64                        vruntime;             /*   136     8 */
+	s64                        vlag;                 /*   144     8 */
+	u64                        vprot;                /*   152     8 */
+	u64                        slice;                /*   160     8 */
+	u64                        nr_migrations;        /*   168     8 */
+	int                        depth;                /*   176     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	struct sched_entity *      parent;               /*   184     8 */
+	/* --- cacheline 3 boundary (192 bytes) --- */
+	struct cfs_rq *            cfs_rq;               /*   192     8 */
+	struct cfs_rq *            my_q;                 /*   200     8 */
+	long unsigned int          runnable_weight;      /*   208     8 */
+
+	/* XXX 40 bytes hole, try to pack */
+
+	/* --- cacheline 4 boundary (256 bytes) --- */
+	struct sched_avg           avg __attribute__((__aligned__(64))); /*   256    64 */
+
+	/* XXX last struct has 4 bytes of padding */
+
+	/* size: 320, cachelines: 5, members: 26 */
+	/* sum members: 272, holes: 3, sum holes: 48 */
+	/* paddings: 3, sum paddings: 12 */
+	/* forced alignments: 2, forced holes: 1, sum forced holes: 40 */
+} __attribute__((__aligned__(64)));
+
+== patched
+struct sched_entity {
+	struct rb_node             run_node __attribute__((__aligned__(8))); /*     0    24 */
+	u64                        deadline;             /*    24     8 */
+	u64                        vruntime;             /*    32     8 */
+	u64                        min_vruntime;         /*    40     8 */
+	s64                        vlag;                 /*    48     8 */
+	u64                        slice;                /*    56     8 */
+	/* --- cacheline 1 boundary (64 bytes) --- */
+	u64                        min_slice;            /*    64     8 */
+	u64                        max_slice;            /*    72     8 */
+	struct load_weight         h_load;               /*    80    16 */
+
+	/* XXX last struct has 4 bytes of padding */
+
+	u64                        vprot;                /*    96     8 */
+	u64                        prev_sum_exec_runtime; /*   104     8 */
+	struct load_weight         load;                 /*   112    16 */
+
+	/* XXX last struct has 4 bytes of padding */
+
+	/* --- cacheline 2 boundary (128 bytes) --- */
+	unsigned char              on_rq;                /*   128     1 */
+	unsigned char              sched_delayed;        /*   129     1 */
+	unsigned char              rel_deadline;         /*   130     1 */
+	unsigned char              custom_slice;         /*   131     1 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	u64                        exec_start;           /*   136     8 */
+	u64                        sum_exec_runtime;     /*   144     8 */
+	struct list_head           group_node;           /*   152    16 */
+	struct cfs_rq *            my_q;                 /*   168     8 */
+	struct sched_entity *      parent;               /*   176     8 */
+	struct cfs_rq *            cfs_rq;               /*   184     8 */
+	/* --- cacheline 3 boundary (192 bytes) --- */
+	int                        depth;                /*   192     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	long unsigned int          runnable_weight;      /*   200     8 */
+	u64                        nr_migrations;        /*   208     8 */
+
+	/* XXX 40 bytes hole, try to pack */
+
+	/* --- cacheline 4 boundary (256 bytes) --- */
+	struct sched_avg           avg __attribute__((__aligned__(64))); /*   256    64 */
+
+	/* XXX last struct has 4 bytes of padding */
+
+	/* size: 320, cachelines: 5, members: 26 */
+	/* sum members: 272, holes: 3, sum holes: 48 */
+	/* paddings: 3, sum paddings: 12 */
+	/* forced alignments: 2, forced holes: 1, sum forced holes: 40 */
+} __attribute__((__aligned__(64)));
+
+== task_struct size / se offset
+base:  struct sched_entity se __attribute__((__aligned__(64))); /* 128 320 */  /* size: 3904, cachelines: 61, members: 253 */ 
+p2c1:  struct sched_entity se __attribute__((__aligned__(64))); /* 128 320 */  /* size: 3904, cachelines: 61, members: 253 */ 

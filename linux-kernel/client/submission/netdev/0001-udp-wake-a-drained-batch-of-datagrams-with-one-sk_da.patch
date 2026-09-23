@@ -1,0 +1,256 @@
+From f6c6f3cb5ee902c2ab3f77b79b3ba38db07831e3 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:16:34 +0200
+Subject: [PATCH net-next 1/1] udp: wake a drained batch of datagrams with
+ one sk_data_ready call
+
+Since commit b650bf0977d3 ("udp: remove busylock and add per NUMA
+queues"), __udp_enqueue_schedule_skb() moves every skb queued on the
+per-NUMA llist into sk_receive_queue under one lock, and then calls
+sk_data_ready() once per skb so that up to nb threads blocked in
+recvmsg() (exclusive waiters) are woken. Each of those calls also runs
+every non-exclusive waiter on the socket, such as an epoll or poll
+entry, and takes the smp_mb() in skwq_has_sleeper() and the waitqueue
+lock: nb times for one queue that became non-empty.
+
+Add sock_data_ready_nr(). For a socket with the default sk_data_ready
+it issues one sync wakeup with nr_exclusive = nb, through a new
+__wake_up_sync_key_nr(). Up to nb exclusive waiters are still woken;
+non-exclusive waiters are called once. A socket whose sk_data_ready has
+been replaced (sockmap, sunrpc) or that has O_ASYNC set keeps the
+per-skb loop.
+
+nb > 1 only happens when several CPUs enqueue to one socket at the same
+time. Measured on the 6.18 host kernel, which has the per-NUMA queues
+but not this patch: N threads, each on its own CPU, send 64-byte
+datagrams over loopback to one socket drained from epoll_wait(), 3 s,
+one run each; bpftrace counts sock_def_readable() calls per
+__udp_enqueue_schedule_skb() call. "Removed" is the number of calls
+this patch would not make (calls minus drains).
+
+  senders  sk_data_ready calls  drains  drains with nb>1  removed
+     1           27071          27071          0              0
+     2           87270          86612        616            658  (0.8%)
+     6          310765         292849      13416          17916  (5.8%)
+    12          326193         274199      29147          51994 (15.9%)
+    24          299610         245418      22598          54192 (18.1%)
+
+At 12 and 24 senders the receive buffer overflowed (about 1/3 of
+datagrams dropped). The kprobes lengthen each enqueue, which may
+itself make batches larger than they would be without tracing.
+
+On a patched kernel (x86_64 guest, nested KVM, 16 vCPUs, this patch
+alone on the base commit, 2 boots, base: exactly 1.00 in 9 boots),
+same test drained from epoll_wait(), ep_poll_callback() calls per
+datagram received (ftrace function profiler):
+
+  senders   base    patched
+     1      1.00    1.00, 1.00
+     6      1.00    0.91, 0.87
+    12      1.00    0.47, 0.45
+
+With unpaced senders the patched kernel's senders run faster, because
+they make fewer wakeup calls, and at 12 senders they overflow the
+receive buffer more often than on the base kernel.  With the senders
+paced to the same total rate on both kernels (50k-200k datagrams/s, 12
+senders, 3 boots each, interleaved), the patched kernel dropped 30 of
+13.5M datagrams and the base kernel 61000, all in runs where the host
+stalled; receiver CPU time per datagram was the same (0.7-0.85 us).
+With 6 or 2 senders and 4 threads blocked in recv(), no datagram went
+unaccounted and no wakeup arrived late (2 boots, 4 runs each).
+
+sock_def_readable() compiles to the same code as before apart from
+passing nr_exclusive = 1 (64 instructions before and after).
+Build-tested (W=1) at this commit.
+
+Generated code, built kernel (x86_64): __udp_enqueue_schedule_skb()
+calls sock_data_ready_nr() once per drained batch instead of calling
+sock_def_readable(), or the indirect callback, once per datagram; it
+grows from 257 to 263 instructions, and the new sock_data_ready_nr() is
+88.
+
+Assisted-by: Claude bpftrace
+---
+Impact: medium -- a UDP socket that receives from several CPUs at once
+(one unconnected socket behind RSS/RPS, or a flood); a connected
+single-flow socket normally sees nb = 1 and is unaffected.
+
+Notes for reviewers:
+- nb == 0 (every skb of the batch dropped by udp_rmem_schedule()) is
+  handled: sock_data_ready_nr() returns without a wakeup, as the old
+  loop did. Passing 0 to __wake_up_common() would wake every waiter.
+- Exclusive waiters: __wake_up_common() with nr_exclusive = nb wakes the
+  same set as nb calls with nr_exclusive = 1 did: entries whose wake
+  function returns 0 (task already running, EPOLLEXCLUSIVE epitem with
+  no waiter) are skipped in both cases.
+- UDP sockets with a replaced sk_data_ready in this tree:
+  sk_psock_verdict_data_ready() (sockmap), xs_data_ready() (sunrpc
+  client), svc_data_ready() (sunrpc server). They keep the old loop,
+  re-reading sk_data_ready each iteration as before. espintcp, tls,
+  kcm, nvme-tcp, ceph etc. override TCP sockets and do not reach this
+  code. TCP and other callers of sock_def_readable() are unchanged.
+- One visible difference remains for the default callback: the
+  sk_data_ready tracepoint fires once per drained batch instead of once
+  per skb.
+- Test programs (udp_batch_wake, udp_rate_wake) and raw results can
+  be provided.
+
+ include/linux/wait.h |  4 ++++
+ include/net/sock.h   |  1 +
+ kernel/sched/wait.c  | 21 +++++++++++++++++++++
+ net/core/sock.c      | 41 ++++++++++++++++++++++++++++++++++++++---
+ net/ipv4/udp.c       |  8 ++------
+ 5 files changed, 66 insertions(+), 9 deletions(-)
+
+diff --git a/include/linux/wait.h b/include/linux/wait.h
+index 7e215330199c..50345614e987 100644
+--- a/include/linux/wait.h
++++ b/include/linux/wait.h
+@@ -213,6 +213,8 @@ int __wake_up(struct wait_queue_head *wq_head, unsigned int mode, int nr, void *
+ void __wake_up_on_current_cpu(struct wait_queue_head *wq_head, unsigned int mode, void *key);
+ void __wake_up_locked_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
+ void __wake_up_sync_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
++void __wake_up_sync_key_nr(struct wait_queue_head *wq_head, unsigned int mode,
++			   int nr_exclusive, void *key);
+ void __wake_up_locked_sync_key(struct wait_queue_head *wq_head, unsigned int mode, void *key);
+ void __wake_up_locked(struct wait_queue_head *wq_head, unsigned int mode, int nr);
+ void __wake_up_sync(struct wait_queue_head *wq_head, unsigned int mode);
+@@ -245,6 +247,8 @@ void __wake_up_pollfree(struct wait_queue_head *wq_head);
+ 	__wake_up(x, TASK_INTERRUPTIBLE, 1, poll_to_key(m))
+ #define wake_up_interruptible_sync_poll(x, m)					\
+ 	__wake_up_sync_key((x), TASK_INTERRUPTIBLE, poll_to_key(m))
++#define wake_up_interruptible_sync_poll_nr(x, nr, m)				\
++	__wake_up_sync_key_nr((x), TASK_INTERRUPTIBLE, (nr), poll_to_key(m))
+ #define wake_up_interruptible_sync_poll_locked(x, m)				\
+ 	__wake_up_locked_sync_key((x), TASK_INTERRUPTIBLE, poll_to_key(m))
+ 
+diff --git a/include/net/sock.h b/include/net/sock.h
+index 60ea55dc1885..6b30ade7f0d4 100644
+--- a/include/net/sock.h
++++ b/include/net/sock.h
+@@ -3143,6 +3143,7 @@ static inline bool sk_dev_equal_l3scope(struct sock *sk, int dif)
+ }
+ 
+ void sock_def_readable(struct sock *sk);
++void sock_data_ready_nr(struct sock *sk, int nr);
+ 
+ int sock_bindtoindex(struct sock *sk, int ifindex, bool lock_sk);
+ void sock_set_timestamp(struct sock *sk, int optname, bool valbool);
+diff --git a/kernel/sched/wait.c b/kernel/sched/wait.c
+index d033f600f48c..e06c8ac90146 100644
+--- a/kernel/sched/wait.c
++++ b/kernel/sched/wait.c
+@@ -194,6 +194,27 @@ void __wake_up_sync_key(struct wait_queue_head *wq_head, unsigned int mode,
+ }
+ EXPORT_SYMBOL_GPL(__wake_up_sync_key);
+ 
++/**
++ * __wake_up_sync_key_nr - sync wakeup of up to @nr_exclusive exclusive waiters
++ * @wq_head: the waitqueue
++ * @mode: which threads
++ * @nr_exclusive: how many exclusive waiters to wake
++ * @key: opaque value to be passed to wakeup targets
++ *
++ * As __wake_up_sync_key(), but for a caller that has @nr_exclusive events
++ * to announce at once: up to @nr_exclusive exclusive waiters are woken,
++ * and non-exclusive waiters are called once rather than once per event.
++ * @nr_exclusive must be positive; 0 means wake every waiter.
++ */
++void __wake_up_sync_key_nr(struct wait_queue_head *wq_head, unsigned int mode,
++			   int nr_exclusive, void *key)
++{
++	if (unlikely(!wq_head))
++		return;
++
++	__wake_up_common_lock(wq_head, mode, nr_exclusive, WF_SYNC, key);
++}
++
+ /**
+  * __wake_up_locked_sync_key - wake up a thread blocked on a locked waitqueue.
+  * @wq_head: the waitqueue
+diff --git a/net/core/sock.c b/net/core/sock.c
+index d23333bb4f3f..7cad484551ca 100644
+--- a/net/core/sock.c
++++ b/net/core/sock.c
+@@ -3656,7 +3656,7 @@ static void sock_def_error_report(struct sock *sk)
+ 	rcu_read_unlock();
+ }
+ 
+-void sock_def_readable(struct sock *sk)
++static __always_inline void __sock_def_readable(struct sock *sk, int nr)
+ {
+ 	struct socket_wq *wq;
+ 
+@@ -3665,12 +3665,47 @@ void sock_def_readable(struct sock *sk)
+ 	rcu_read_lock();
+ 	wq = rcu_dereference(sk->sk_wq);
+ 	if (skwq_has_sleeper(wq))
+-		wake_up_interruptible_sync_poll(&wq->wait, EPOLLIN | EPOLLPRI |
+-						EPOLLRDNORM | EPOLLRDBAND);
++		wake_up_interruptible_sync_poll_nr(&wq->wait, nr,
++						   EPOLLIN | EPOLLPRI |
++						   EPOLLRDNORM | EPOLLRDBAND);
+ 	sk_wake_async_rcu(sk, SOCK_WAKE_WAITD, POLL_IN);
+ 	rcu_read_unlock();
+ }
+ 
++void sock_def_readable(struct sock *sk)
++{
++	__sock_def_readable(sk, 1);
++}
++
++/**
++ * sock_data_ready_nr - call sk_data_ready() for @nr newly queued skbs
++ * @sk: socket
++ * @nr: number of skbs queued
++ *
++ * Equivalent to calling sk->sk_data_ready() @nr times. With the default
++ * callback the wakeup is issued once with @nr as the exclusive count, so
++ * up to @nr exclusive waiters (recvmsg()) are still woken while
++ * non-exclusive waiters (poll, epoll) are called once. A replaced callback
++ * may count calls, and O_ASYNC with an F_SETSIG signal queues one signal
++ * per call, so both keep the loop.
++ */
++void sock_data_ready_nr(struct sock *sk, int nr)
++{
++	/* nr_exclusive == 0 would wake every waiter */
++	if (unlikely(nr <= 0))
++		return;
++
++	if (likely(READ_ONCE(sk->sk_data_ready) == sock_def_readable &&
++		   !sock_flag(sk, SOCK_FASYNC))) {
++		__sock_def_readable(sk, nr);
++		return;
++	}
++
++	while (nr--)
++		INDIRECT_CALL_1(READ_ONCE(sk->sk_data_ready),
++				sock_def_readable, sk);
++}
++
+ static void sock_def_write_space(struct sock *sk)
+ {
+ 	struct socket_wq *wq;
+diff --git a/net/ipv4/udp.c b/net/ipv4/udp.c
+index bb8cfc62cb00..29f2c4886324 100644
+--- a/net/ipv4/udp.c
++++ b/net/ipv4/udp.c
+@@ -1752,13 +1752,9 @@ int __udp_enqueue_schedule_skb(struct sock *sk, struct sk_buff *skb)
+ 
+ 	if (!sock_flag(sk, SOCK_DEAD)) {
+ 		/* Multiple threads might be blocked in recvmsg(),
+-		 * using prepare_to_wait_exclusive().
++		 * using prepare_to_wait_exclusive(): wake up to nb of them.
+ 		 */
+-		while (nb) {
+-			INDIRECT_CALL_1(READ_ONCE(sk->sk_data_ready),
+-					sock_def_readable, sk);
+-			nb--;
+-		}
++		sock_data_ready_nr(sk, nb);
+ 	}
+ 
+ 	if (unlikely(to_drop)) {
+-- 
+2.53.0
+

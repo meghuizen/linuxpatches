@@ -1,0 +1,100 @@
+From 306c593487f7cae56f69ab767f02dc0e0a4cbac1 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:35:41 +0200
+Subject: [PATCH nf-next 0/3] netfilter: conntrack: cheaper tuple hashing, max/buckets warning
+
+This series makes two changes to how conntrack hashes tuples and adds
+one diagnostic:
+
+1. IPv4 tuples are hashed with siphash_2u64() over the 16 bytes that
+   matter instead of siphash() over 39 bytes.  This runs on every
+   conntrack lookup.
+2. The unscaled tuple hashes are stored in struct nf_conn at insertion,
+   so teardown no longer hashes both tuples again just to choose the
+   bucket locks.
+3. A warning and a documentation note when nf_conntrack_max is raised
+   above 8 times nf_conntrack_buckets, because the table is not resized.
+
+Kernel instructions measured in an x86_64 guest (nested KVM), the
+series against the base commit, 2 boots against 7 interleaved base
+boots:
+
+  new flow, per packet          16845 -> 16686   (-155, two IPv4 hashes)
+  established stream, per pkt   14422 -> 14311   (inside the spread)
+  conntrack -F, per entry        1908 ->  1311   (-597, patch 2)
+
+There is no packet-rate or latency measurement.
+
+  #  summary                          impact                  evidence
+  1  hash IPv4 tuples as two words    medium: IPv4 conntrack  measured
+                                      lookups, per packet     (insn counts)
+  2  keep unscaled hashes for         low: per deleted        measured
+     teardown                         conntrack entry         (insn counts)
+  3  warn when max > 8 x buckets      low: diagnostic         tested
+
+Testing:
+- Every commit builds the touched objects (nf_conntrack_core.o,
+  nf_conntrack_standalone.o, nf_conntrack_netlink.o, nf_conntrack_bpf.o,
+  nf_nat_core.o) with W=1 and no warnings on x86_64.  nf_conntrack_core.o
+  also builds on i386.
+- checkpatch.pl --strict is clean apart from the missing Signed-off-by.
+- Instruction counts per call on x86_64 and i386 (perf stat,
+  instructions:u).  Structure layout on both (pahole).
+- Generated code, built kernel: the IPv4 path of hash_conntrack_raw()
+  calls siphash_2u64() instead of __siphash_unaligned();
+  __nf_ct_delete_from_lists() makes no hash call (two before).
+- Runtime, x86_64 guest, 2 boots of the series: the counts above;
+  ctnetlink insert/delete across a table resize and three resizes during
+  flow churn leave the table consistent; the patch 3 warning stays
+  silent at 8x and fires once at 9x; no kernel warnings.
+
+Not tested:
+- Packet rate and latency; hardware other than a nested KVM guest;
+  IPv6 at runtime; i386 at runtime.
+- No allyesconfig/allmodconfig builds, no arm64 or RISC-V builds, no
+  sparse, no netfilter selftests.
+- The series is against v7.3-rc3 (518e5b794c06) and has not been
+  rebased onto nf-next.
+
+Tool assistance: the changes, changelogs and measurements in this series
+were produced with Claude (Anthropic, claude-opus-5-5) as a coding
+assistant.  It was asked to find and fix performance problems in the
+networking forwarding path and to measure them.  Each patch carries an
+Assisted-by tag.
+
+Signed-off-by: <submitter adds before sending>
+
+To: Pablo Neira Ayuso <pablo@netfilter.org>
+To: Florian Westphal <fw@strlen.de>
+Cc: Phil Sutter <phil@nwl.cc>
+Cc: netfilter-devel@vger.kernel.org
+Cc: coreteam@netfilter.org
+Cc: netdev@vger.kernel.org
+Cc: linux-kernel@vger.kernel.org
+Cc: "David S. Miller" <davem@davemloft.net>
+Cc: Eric Dumazet <edumazet@google.com>
+Cc: Jakub Kicinski <kuba@kernel.org>
+Cc: Paolo Abeni <pabeni@redhat.com>
+Cc: Simon Horman <horms@kernel.org>
+Cc (patch 3, documentation): Jonathan Corbet <corbet@lwn.net>,
+    Shuah Khan <skhan@linuxfoundation.org>,
+    Randy Dunlap <rdunlap@infradead.org>, linux-doc@vger.kernel.org
+(get_maintainer.pl --no-rolestats --no-git --no-git-fallback)
+
+Michiel (3):
+  netfilter: conntrack: hash IPv4 tuples as two words
+  netfilter: conntrack: keep the unscaled tuple hashes for teardown
+  netfilter: conntrack: warn when nf_conntrack_max outgrows the hash
+    table
+
+ .../networking/nf_conntrack-sysctl.rst        |  5 ++
+ include/net/netfilter/nf_conntrack.h          |  6 ++
+ net/netfilter/nf_conntrack_core.c             | 63 +++++++++++--------
+ net/netfilter/nf_conntrack_standalone.c       | 27 +++++++-
+ 4 files changed, 73 insertions(+), 28 deletions(-)
+
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
+-- 
+2.53.0
+

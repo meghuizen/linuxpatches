@@ -10,23 +10,35 @@ kernel source, gives the change, explains how to test it, and states what
 you should realistically expect to gain. The point is that you can read one
 and understand *why* it exists, not only what it touches.
 
-All of it is written against **Linux 7.2, vanilla**.
+The numbered documents are written against Linux 7.2, vanilla. The patches
+in the area directories are against v7.3-rc3 (518e5b794c06), which is also
+the base of the patches prepared for submission.
+
+Per-patch status (what goes upstream, what was removed and why, measured
+results): [`SUBMISSION-STATUS.md`](SUBMISSION-STATUS.md). Each patch was
+measured alone on v7.3-rc3 in a nested KVM guest; see the "How it was
+measured" section there.
 
 ## Areas
 
-| Area | Contents |
-|---|---|
-| [`vfs/`](vfs/README.md) | The open and stat paths: 15 patches, analysis, Lean proofs |
-| [`sched/`](sched/README.md) | Scheduler cacheline placement: 2 patches, verified on x86_64 and i386 |
-| [`net/`](net/README.md) | The router forwarding path: 8 patches, generic `net/` code only |
-| [`client/`](client/README.md) | The outbound path: 3 patches, what a browser or curl does |
+| Area | Contents | For submission |
+|---|---|---|
+| [`vfs/`](vfs/README.md) | The open and stat paths: analysis, Lean proofs | 3 patches ([`vfs/submission/`](vfs/submission/)) |
+| [`net/`](net/README.md) | The router forwarding path, generic `net/` code only | 3 nf-next patches; CAKE timer slack pending ([`net/submission/`](net/submission/)) |
+| [`client/`](client/README.md) | The outbound path: what a browser or curl does | 1 UDP patch ([`client/submission/netdev/`](client/submission/netdev/)) |
+| [`sched/`](sched/README.md) | Scheduler cacheline placement | none: the EEVDF reorder was removed, no measurable difference ([`sched/submission/`](sched/submission/)) |
+
+The `patches/` directory in each area held an older export and is now empty
+apart from a note; the old versions of CAKE timer slack, conntrack raw hashes
+and UDP batch wake had bugs that are fixed in the `submission/` versions.
 
 The numbered documents below predate that split and stand on their own.
 
 ## Three kinds of documents in here
 
-1. **Ready patches** (1-4) — small, concrete source changes. Reorder fields in
-   a struct. Low risk, no behaviour change.
+1. **Layout patches** (1-4) — small, concrete source changes. Reorder fields
+   in a struct. None of the four is being submitted; see the status note under
+   each heading below.
 2. **Projects** (5, 6, 9) — features that need weeks of work and specific
    hardware. The document is a plan and a readiness audit, not a diff.
 3. **Trackers** (7, 8) — nothing to build. Upstream work we want but do not
@@ -42,57 +54,62 @@ read, it is how many different lines you touch. Fields used together should
 sit together. Fields written often should not sit next to fields read often,
 because writes on one CPU throw away the line for every other CPU.
 
-**Read them in order.** Patch 2 changes the same region of the same file as
+Read them in order. Patch 2 changes the same region of the same file as
 patch 1, so patch 1 goes first. Patch 4 is the same fix as patch 3, one struct
 further down.
 
 ### [1. Keep the scheduler hot fields together in `task_struct`](01-task-struct-scheduler-entities.md)
 
+Status (measured 2026-09-23): not submitted. Its successor, the EEVDF `sched_entity`
+reorder, measured alone: no difference beyond the base spread; removed. See
+[`sched/submission/REVIEW.md`](sched/submission/REVIEW.md).
+
 Moves 504 bytes that a normal task never uses (`rt`, `dl`, `scx`) out from
 between `se` and `sched_class`, the two fields the scheduler reads on every
 context switch.
 
-**Expected impact:** a context switch touches about 5 cache lines instead of
-12. That is low single-digit percent on switch-heavy benchmarks, and probably
-nothing measurable on anything else. The argument for it is the price, not the
-size of the win: ten reordered lines, no behaviour change, permanent.
+Estimate made before measurement: a context switch touches about 5 cache lines
+instead of 12 (static count). No runtime gain has been shown.
 
 ### [2. Put the wakeup fields on the wakeup cache lines](02-task-struct-wakeup-fields.md)
+
+Status (2026-09-23): not submitted, not measured. Its successor (wake_entry
+placement) was dropped on analysis: the `cpus_ptr` move saves no line, since readers
+dereference it to `cpus_mask`. See [`sched/submission/REVIEW.md`](sched/submission/REVIEW.md).
 
 Moves `nr_cpus_allowed` and `cpus_ptr` from cache line ~20 up next to the
 other wakeup fields in the first two lines.
 
-**Expected impact:** one fewer remote cache line per wakeup, which you can
-prove with `perf c2c`. Wakeup misses are expensive because the waking CPU is
-pulling the woken task's memory out of another CPU's cache. Visible on
-wakeup-heavy cross-socket work, lost in the noise on a laptop.
+Estimate made before measurement: one fewer remote cache line per wakeup. The
+review above found no line saved on the paths that read `cpus_ptr`.
 
 ### [3. Fix false sharing in `struct inode`](03-inode-false-sharing.md)
+
+Status (2026-09-23): removed. Layout model over all 8 inode start offsets:
++1 line on stat (2 of 8 offsets) and on open (2 of 8); no placement fixes it. See
+[`vfs/submission/REVIEW.md`](vfs/submission/REVIEW.md) ("Why orig 12 was removed").
 
 Moves `i_fop` and `i_flctx` off the cache line they share with six constantly
 written atomic counters (`i_count`, `i_writecount`, `i_dio_count`, and
 others). Adds build-time asserts so the layout cannot silently rot later.
 
-**Expected impact:** the strongest of the four. This is not tidying, it is a
-live conflict with a named reader (`open()`) and named writers
-(`iget`/`iput`). Refcount traffic on one CPU currently invalidates the
-`open()` path on every other CPU. `sock`, `tcp_sock`, `net_device`, and
-`dentry` already got this exact fix; `inode` is the last big hot struct
-without it. Real on a 64-core build server, invisible on a laptop.
+Estimate made before measurement: removes a false-sharing conflict between
+`open()` and the refcount writers. The layout model above contradicts this:
+the patch lengthens the stat and open paths at some offsets.
 
 ### [4. Fix false sharing in `struct address_space`](04-address-space-false-sharing.md)
+
+Status (2026-09-23): removed. An earlier run showed no difference on its target workload
+(10.21M vs 10.18M iops). See [`vfs/submission/REVIEW.md`](vfs/submission/REVIEW.md).
 
 Regroups the page-cache fields: the ones written on every page-cache add or
 remove (`i_pages`, `nrpages`, `writeback_index`) go on one line, the ones read
 on every fault, read, and writeback (`host`, `a_ops`, `gfp_mask`, `flags`) go
 on another. Today they are interleaved.
 
-**Expected impact:** two separate effects. The false-sharing fix only pays
-when several CPUs hammer one file — real for databases and shared logs, absent
-for many-small-file workloads. The second effect is smaller but unconditional:
-a page-cache add or remove now dirties one line instead of two. Weaker than
-patch 3, so submit it after patch 3, framed as the same treatment for the next
-struct down.
+Estimate made before measurement: less false sharing when several CPUs use one
+file, and one dirtied line instead of two per page-cache add or remove. The
+measurement above showed no difference.
 
 ## 5, 6, 9: Feature projects
 
@@ -202,7 +219,9 @@ you are ready to argue VFS locking upstream.
 
 ## Where to start
 
-- Want something you can actually apply today: patch 3, then 1, 2, 4.
+- Want patches that are being submitted: see
+  [`SUBMISSION-STATUS.md`](SUBMISSION-STATUS.md). Documents 1-4 are kept as
+  analyses; none of them is being submitted.
 - Have server hardware and time: patch 5.
 - Run large memory-tiering fleets: patch 9.
 - Just want to stay informed: 7, 8, and 10.
@@ -234,9 +253,11 @@ patch -p1 -R < /path/to/0001-short-description.patch
 
 ## Notes
 
-- Everything here is written against Linux 7.2. Applying it to a different
-  version may fail or produce broken code.
-- Every "expected impact" above is an estimate, not a measurement. Each
+- The numbered documents are written against Linux 7.2; the area patches
+  against v7.3-rc3 (518e5b794c06). Applying them to a different version may
+  fail or produce broken code.
+- Every "expected impact" above is an estimate, not a measurement, except
+  where a "Status (2026-09-23)" note gives the outcome. Each
   document ends with an effectiveness test that tells you how to check whether
   the change actually did anything on your machine. Run it. Layout changes are
   easy to get wrong in a way that looks like an improvement.

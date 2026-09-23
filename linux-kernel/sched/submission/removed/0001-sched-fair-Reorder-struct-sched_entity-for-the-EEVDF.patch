@@ -1,0 +1,146 @@
+From 17ebab605729bcbd79dabfdb0ef35dbf868af7ed Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:43:38 +0200
+Subject: [RFC PATCH 1/1] sched/fair: Reorder struct sched_entity for the EEVDF
+ tree walk
+
+pick_eevdf() reads run_node, vruntime and the left child's min_vruntime
+for every entity it visits, and the augmented rbtree callback
+min_vruntime_update() also reads slice, min_slice and max_slice. On
+x86_64 these are at se+32, se+136, se+64, se+160, se+72 and se+80, on
+three different cachelines, so each level of the walk can miss on three
+lines per entity.
+
+Put run_node, deadline, vruntime, min_vruntime, vlag and slice first
+(64 bytes on 64-bit), then min_slice and max_slice, and order the rest
+so that fields read together by update_curr(), set_next_entity(), PELT
+and detach_tasks() share a line. sizeof(struct sched_entity) and the
+alignment of avg do not change, so no task_struct offset moves.
+
+Static analysis only; this layout has not been measured at runtime.
+Distinct cachelines of task_struct touched per entity, before -> after,
+from pahole offsets of kernel/sched/core.o at 518e5b794c06, x86_64,
+FAIR_GROUP_SCHED=y, against the fields each function accesses:
+
+  pick_eevdf() heap search, per entity visited   3 -> 1
+  min_vruntime_update(), per entity              3 -> 2
+  rbtree insert walk, per entity visited         1 -> 1
+  update_curr() on a task                        4 -> 3
+  update_se() from rt, dl, scx, stop             2 -> 1
+  enqueue / dequeue of a task                    5 -> 4
+  detach_tasks(), per task scanned               3 -> 2
+  PELT update of a group entity                  4 -> 4
+  set_task_cpu() on migration                    3 -> 3
+
+The same count was done for x86_64 with FAIR_GROUP_SCHED=n and for
+i386 with L1_CACHE_SHIFT=6 and =5 (M686, where se is only 32-byte
+aligned in task_struct), each with and without FAIR_GROUP_SCHED: no
+access pattern touches more lines than before in any of them.
+
+Checked again on the built kernel (vmlinux with and without this patch,
+x86_64): 10 of the access paths above touch fewer lines, 3 the same, none
+more; pick_eevdf() goes from 3 lines to 1 per entity visited.
+
+Tested: kernel/sched/{core,fair,build_policy,build_utility}.o,
+kernel/fork.o and init/init_task.o compile without new warnings for
+x86_64 and i386; sizeof(struct sched_entity) and sizeof(struct
+task_struct) are unchanged in all five configurations. Not booted.
+
+Assisted-by: Claude pahole
+---
+Impact: low -- CFS pick/enqueue cost with many runnable tasks per CPU;
+benefit not demonstrated at runtime.
+
+RFC because the evidence is a line count, not a measurement. The
+counting takes the fields each function reads or writes (listed in the
+cover letter) and maps them through pahole offsets; it says nothing
+about whether those lines were cached. The test that would settle it
+is in the cover letter.
+
+All writes to a queued entity happen under its rq lock, so moving
+fields within sched_entity does not create lockless false sharing; the
+cost being reduced is the number of lines a lock holder (local, a
+remote waker doing the enqueue, or the load balancer) has to fetch.
+avg keeps its own cacheline.
+
+32-bit (se is not at a 64-byte boundary with M686, so lines were
+counted at absolute task_struct offsets): the pick walk goes 2 -> 1
+lines per entity with L1_CACHE_SHIFT=6 and 3 -> 2 with M686; nothing
+gets worse. 128-byte-line architectures were not checked with their own
+build.
+
+ include/linux/sched.h | 37 ++++++++++++++++++++-----------------
+ 1 file changed, 20 insertions(+), 17 deletions(-)
+
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 705970d07614..be6767a63a99 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -570,44 +570,47 @@ struct sched_statistics {
+ } ____cacheline_aligned;
+ 
+ struct sched_entity {
+-	/* For load-balancing: */
+-	struct load_weight		load;
+-	struct load_weight		h_load;
++	/*
++	 * pick_eevdf() and the rbtree insert and augment callbacks read
++	 * these for every entity they visit: keep them together.
++	 */
+ 	struct rb_node			run_node;
+ 	u64				deadline;
++	u64				vruntime;
+ 	u64				min_vruntime;
++	/* Approximated virtual lag: */
++	s64				vlag;
++	u64				slice;
+ 	u64				min_slice;
+ 	u64				max_slice;
+ 
+-	struct list_head		group_node;
++	struct load_weight		h_load;
++	/* 'Protected' deadline, to give out minimum quantums: */
++	u64				vprot;
++	u64				prev_sum_exec_runtime;
++	struct load_weight		load;
++
+ 	unsigned char			on_rq;
+ 	unsigned char			sched_delayed;
+ 	unsigned char			rel_deadline;
+ 	unsigned char			custom_slice;
+ 					/* hole */
+-
+ 	u64				exec_start;
+ 	u64				sum_exec_runtime;
+-	u64				prev_sum_exec_runtime;
+-	u64				vruntime;
+-	/* Approximated virtual lag: */
+-	s64				vlag;
+-	/* 'Protected' deadline, to give out minimum quantums: */
+-	u64				vprot;
+-	u64				slice;
+-
+-	u64				nr_migrations;
++	/* detach_tasks() reads this with exec_start and sched_delayed: */
++	struct list_head		group_node;
+ 
+ #ifdef CONFIG_FAIR_GROUP_SCHED
+-	int				depth;
++	/* rq "owned" by this entity/group: */
++	struct cfs_rq			*my_q;
+ 	struct sched_entity		*parent;
+ 	/* rq on which this entity is (to be) queued: */
+ 	struct cfs_rq			*cfs_rq;
+-	/* rq "owned" by this entity/group: */
+-	struct cfs_rq			*my_q;
++	int				depth;
+ 	/* cached value of my_q->h_nr_running */
+ 	unsigned long			runnable_weight;
+ #endif
++	u64				nr_migrations;
+ 
+ 	/*
+ 	 * Per entity load average tracking.
+-- 
+2.53.0
+

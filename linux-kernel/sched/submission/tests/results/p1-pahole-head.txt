@@ -1,0 +1,88 @@
+== base
+struct task_struct {
+	struct thread_info         thread_info;          /*     0    24 */
+	unsigned int               __state;              /*    24     4 */
+	unsigned int               saved_state;          /*    28     4 */
+	void *                     stack;                /*    32     8 */
+	refcount_t                 usage __attribute__((__aligned__(4))); /*    40     4 */
+	unsigned int               flags;                /*    44     4 */
+	unsigned int               ptrace;               /*    48     4 */
+	u8                         on_cpu;               /*    52     1 */
+	u8                         on_rq;                /*    53     1 */
+	u8                         is_blocked;           /*    54     1 */
+	u8                         __pad;                /*    55     1 */
+	struct __call_single_node  wake_entry __attribute__((__aligned__(8))); /*    56    16 */
+	/* --- cacheline 1 boundary (64 bytes) was 8 bytes ago --- */
+	unsigned int               wakee_flips;          /*    72     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	long unsigned int          wakee_flip_decay_ts;  /*    80     8 */
+	struct task_struct *       last_wakee;           /*    88     8 */
+	int                        recent_used_cpu;      /*    96     4 */
+	int                        wake_cpu;             /*   100     4 */
+	int                        prio;                 /*   104     4 */
+	int                        static_prio;          /*   108     4 */
+	int                        normal_prio;          /*   112     4 */
+	unsigned int               rt_priority;          /*   116     4 */
+
+	/* XXX 8 bytes hole, try to pack */
+
+	/* --- cacheline 2 boundary (128 bytes) --- */
+== published wake_entry patch, made standalone
+struct task_struct {
+	struct thread_info         thread_info;          /*     0    24 */
+	unsigned int               __state;              /*    24     4 */
+	unsigned int               saved_state;          /*    28     4 */
+	void *                     stack;                /*    32     8 */
+	refcount_t                 usage __attribute__((__aligned__(4))); /*    40     4 */
+	unsigned int               flags;                /*    44     4 */
+	unsigned int               ptrace;               /*    48     4 */
+	u8                         on_cpu;               /*    52     1 */
+	u8                         on_rq;                /*    53     1 */
+	u8                         is_blocked;           /*    54     1 */
+	u8                         __pad;                /*    55     1 */
+	const cpumask_t  *         cpus_ptr;             /*    56     8 */
+	/* --- cacheline 1 boundary (64 bytes) --- */
+	struct __call_single_node  wake_entry __attribute__((__aligned__(8))); /*    64    16 */
+	unsigned int               wakee_flips;          /*    80     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	long unsigned int          wakee_flip_decay_ts;  /*    88     8 */
+	struct task_struct *       last_wakee;           /*    96     8 */
+	int                        recent_used_cpu;      /*   104     4 */
+	int                        wake_cpu;             /*   108     4 */
+	int                        prio;                 /*   112     4 */
+	int                        static_prio;          /*   116     4 */
+	int                        normal_prio;          /*   120     4 */
+	unsigned int               rt_priority;          /*   124     4 */
+	/* --- cacheline 2 boundary (128 bytes) --- */
+	struct sched_entity        se __attribute__((__aligned__(64))); /*   128   320 */
+
+== i386 base (M686 and X86_GENERIC identical here)
+struct task_struct {
+	struct thread_info         thread_info;          /*     0    16 */
+	unsigned int               __state;              /*    16     4 */
+	unsigned int               saved_state;          /*    20     4 */
+	void *                     stack;                /*    24     4 */
+	refcount_t                 usage __attribute__((__aligned__(4))); /*    28     4 */
+	unsigned int               flags;                /*    32     4 */
+	unsigned int               ptrace;               /*    36     4 */
+	u8                         on_cpu;               /*    40     1 */
+	u8                         on_rq;                /*    41     1 */
+	u8                         is_blocked;           /*    42     1 */
+	u8                         __pad;                /*    43     1 */
+	struct __call_single_node  wake_entry __attribute__((__aligned__(4))); /*    44     8 */
+	unsigned int               wakee_flips;          /*    52     4 */
+	long unsigned int          wakee_flip_decay_ts;  /*    56     4 */
+	struct task_struct *       last_wakee;           /*    60     4 */
+	/* --- cacheline 1 boundary (64 bytes) --- */
+	int                        recent_used_cpu;      /*    64     4 */
+	int                        wake_cpu;             /*    68     4 */
+	int                        prio;                 /*    72     4 */
+	int                        static_prio;          /*    76     4 */
+	int                        normal_prio;          /*    80     4 */
+	unsigned int               rt_priority;          /*    84     4 */
+
+	/* XXX 40 bytes hole, try to pack */

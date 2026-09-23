@@ -1,0 +1,21 @@
+=== cf230c522a3a selftests: build and run the openat2 tests again
+=== ffcd8df3551b lockref: adjust the count with a single addition
+    lib/lockref.o                      rc=0 warnings/errors=0
+=== 8bf21f664407 fs: hand the path walk's dentry reference to the opened file
+    fs/namei.o                         rc=0 warnings/errors=0
+    fs/open.o                          rc=0 warnings/errors=0
+    fs/stat.o                          rc=0 warnings/errors=0
+=== 1b4443331292 fs: allocate the struct file for open() only when it is needed
+    fs/namei.o                         rc=0 warnings/errors=0
+
+# each kept kernel patch applied alone on 518e5b794c06 (W=1)
+=== pt-dentry 8ad517267859 fs: hand the path walk's dentry reference to the opened file
+    fs/namei.o           rc=0 warnings/errors=0
+    fs/open.o            rc=0 warnings/errors=0
+    fs/stat.o            rc=0 warnings/errors=0
+=== pt-lockref 1eb071299ac8 lockref: adjust the count with a single addition
+    lib/lockref.o        rc=0 warnings/errors=0
+=== pt-lazyalloc 2677d744f0ed fs: allocate the struct file for open() only when it is needed
+    fs/namei.o           rc=0 warnings/errors=0
+
+# base 518e5b794c06, W=1: fs/namei.o fs/open.o fs/stat.o lib/lockref.o fs/inode.o: 0 warnings each

@@ -1,0 +1,15 @@
+Userspace copy of lib/lockref.c's CMPXCHG_LOOP, old (new.count++) vs new
+(new.lock_count += lockref_step()) update. Host: AMD Ryzen 9 8940HX, WSL2
+6.18, gcc 15.2.
+
+  gcc -O2 -Wall -o lockref_model lockref_model.c
+  ./lockref_model check        # equivalence at edge counts (little-endian only)
+  N=50000000; for i in 1 2 3 4 5; do for v in old new; do
+    perf stat -x, -e instructions:u,cycles:u taskset -c 2 ./lockref_model $v $N
+  done; done                    # results: perf-single-thread.txt
+
+Kernel object comparison (lib/lockref.o at 518e5b794c06 vs the patch):
+  lockref_get 44 -> 37, lockref_get_not_zero 60 -> 54,
+  lockref_put_return 40 -> 39, lockref_put_or_lock 54 -> 51,
+  lockref_get_not_dead 60 -> 54 instructions.
+Big-endian was not built or tested.

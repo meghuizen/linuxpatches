@@ -1,0 +1,123 @@
+From 17ebab605729bcbd79dabfdb0ef35dbf868af7ed Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:44:38 +0200
+Subject: [RFC PATCH 0/1] sched/fair: sched_entity layout for the EEVDF
+ tree walk
+
+pick_eevdf() and the augmented rbtree callbacks read run_node, vruntime,
+min_vruntime, slice, min_slice and max_slice of every entity they visit.
+On x86_64 these currently span three cachelines of sched_entity. This
+RFC reorders sched_entity so the walk reads one line per entity (two
+for the augment callback), without changing its size, the alignment of
+avg, or any task_struct offset, and without increasing the number of
+lines touched by any other access pattern checked (update_curr, PELT,
+enqueue/dequeue, set_next_entity, detach_tasks, set_task_cpu, and
+update_curr_common for rt/dl/scx/stop), on x86_64 and i386, with and
+without FAIR_GROUP_SCHED.
+
+It is an RFC because the evidence is static: a line count from pahole
+offsets and hand-derived access lists. It has not been booted or
+measured. Comments on whether this kind of reorder is wanted at all,
+and on what measurement you would want to see, are the point of
+posting it.
+
+  #  summary                         impact            evidence
+  1  reorder sched_entity for the    low: CFS pick     static analysis
+     EEVDF tree walk                 and enqueue with  only; not
+                                     many runnable     measured
+                                     tasks per CPU
+
+Lines touched per entity, before -> after (64-byte lines, absolute
+task_struct offsets, x86_64 / i386 L1_CACHE_SHIFT=6 / i386 M686,
+FAIR_GROUP_SCHED=y):
+
+  pick_eevdf() heap search, per entity visited  3->1  2->1  3->2
+  min_vruntime_update(), per entity             3->2  2->2  3->2
+  update_curr() on a task                       4->3  3->3  3->3
+  detach_tasks(), per task scanned              3->2  4->3  3->2
+  enqueue / dequeue of a task                   5->4  4->4  4->4
+
+Access lists used (fields of sched_entity; from the named functions):
+  pick_eevdf:        run_node vruntime min_vruntime
+  insert walk:       run_node deadline
+  augment callback:  run_node vruntime slice min_vruntime min_slice
+                     max_slice
+  update_curr task:  exec_start sum_exec_runtime my_q vruntime h_load
+                     deadline custom_slice slice vprot on_rq parent
+                     cfs_rq
+  update_curr_common: exec_start sum_exec_runtime my_q
+  PELT:              avg on_rq sched_delayed my_q load
+                     (+ runnable_weight for a group entity)
+  enqueue task:      custom_slice slice h_load vlag vruntime
+                     rel_deadline deadline avg on_rq sched_delayed
+                     my_q load group_node exec_start cfs_rq parent
+                     min_vruntime min_slice max_slice run_node
+  dequeue task:      as enqueue minus custom_slice rel_deadline
+                     exec_start deadline
+  set_next_entity:   on_rq avg load my_q exec_start sum_exec_runtime
+                     prev_sum_exec_runtime run_node min_vruntime
+                     min_slice max_slice deadline slice vruntime h_load
+                     vprot
+  detach_tasks:      group_node sched_delayed exec_start cfs_rq avg
+  set_task_cpu:      avg nr_migrations cfs_rq parent depth
+
+Testing:
+- pahole on kernel/sched/core.o before and after, five configurations:
+  x86_64 and i386 (L1_CACHE_SHIFT 6 and M686) with FAIR_GROUP_SCHED,
+  x86_64 and i386 M686 without. sizeof(struct sched_entity) and
+  sizeof(struct task_struct) unchanged in all five; no task_struct
+  member other than se's contents changes cacheline.
+- Compiled kernel/sched/{core,fair,build_policy,build_utility}.o,
+  kernel/fork.o and init/init_task.o for x86_64, i386, and x86_64
+  without FAIR_GROUP_SCHED: no new warnings. fair.o text is 97 bytes
+  smaller on x86_64 (bloat-o-meter).
+- checkpatch.pl --strict: clean apart from the missing Signed-off-by.
+- Checked on the built kernel with and without the patch: 10 access
+  paths touch fewer lines, 3 the same, none more; pick_eevdf() 3 -> 1
+  line per entity visited.
+
+Not tested:
+- Not booted on any architecture; no runtime measurement of any kind.
+- No perf c2c / HITM data (the test machine exposes no memory-event
+  PMU).
+- 128-byte cacheline architectures (powerpc64, s390) and other 32-bit
+  architectures were not built.
+- No full kernel build; only the objects listed above.
+
+The next test planned is an interleaved A/B on one CPU with N runnable
+CFS tasks (N up to 512), counting kernel instructions, cycles and
+L1-dcache misses per context switch. The recommendation changes to a
+non-RFC posting only if L1 misses per switch fall with the patch as N
+grows and nothing else regresses.
+
+Tool assistance: the change, changelog and analysis in this series were
+produced with Claude (Anthropic, claude-opus-5-5) as a coding assistant,
+prompted to find and fix cacheline placement problems in the scheduler
+and to verify them with pahole. The patch carries an Assisted-by tag.
+
+Suggested recipients (scripts/get_maintainer.pl --no-rolestats):
+To: Ingo Molnar <mingo@redhat.com>
+To: Peter Zijlstra <peterz@infradead.org>
+To: Juri Lelli <juri.lelli@redhat.com>
+To: Vincent Guittot <vincent.guittot@linaro.org>
+Cc: Dietmar Eggemann <dietmar.eggemann@arm.com>
+Cc: Steven Rostedt <rostedt@goodmis.org>
+Cc: Ben Segall <bsegall@google.com>
+Cc: Mel Gorman <mgorman@suse.de>
+Cc: Valentin Schneider <vschneid@redhat.com>
+Cc: K Prateek Nayak <kprateek.nayak@amd.com>
+Cc: linux-kernel@vger.kernel.org
+
+Signed-off-by: <submitter adds before sending>
+
+Michiel (1):
+  sched/fair: Reorder struct sched_entity for the EEVDF tree walk
+
+ include/linux/sched.h | 37 ++++++++++++++++++++-----------------
+ 1 file changed, 20 insertions(+), 17 deletions(-)
+
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
+-- 
+2.53.0
+

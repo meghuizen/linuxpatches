@@ -1,0 +1,87 @@
+kernel: 6.18.40.1-microsoft-standard-WSL2
+## T1a: callbacks per datagram, epoll consumer
+./run-guest.sh: line 21: /sys/kernel/tracing/function_profile_enabled: Permission denied
+./run-guest.sh: line 22: /sys/kernel/tracing/function_profile_enabled: Permission denied
+epoll senders=1 secs=3.0 sent=66914 got=66914 rcvbuf_errors=0 epoll_waits=29305 dgram/wait=2.3
+./run-guest.sh: line 24: /sys/kernel/tracing/function_profile_enabled: Permission denied
+cat: '/sys/kernel/tracing/trace_stat/function*': No such file or directory
+./run-guest.sh: line 21: /sys/kernel/tracing/function_profile_enabled: Permission denied
+./run-guest.sh: line 22: /sys/kernel/tracing/function_profile_enabled: Permission denied
+epoll senders=2 secs=3.0 sent=179571 got=179571 rcvbuf_errors=0 epoll_waits=42872 dgram/wait=4.2
+./run-guest.sh: line 24: /sys/kernel/tracing/function_profile_enabled: Permission denied
+cat: '/sys/kernel/tracing/trace_stat/function*': No such file or directory
+./run-guest.sh: line 21: /sys/kernel/tracing/function_profile_enabled: Permission denied
+./run-guest.sh: line 22: /sys/kernel/tracing/function_profile_enabled: Permission denied
+epoll senders=6 secs=3.1 sent=573701 got=391047 rcvbuf_errors=182654 epoll_waits=5998 dgram/wait=65.2
+./run-guest.sh: line 24: /sys/kernel/tracing/function_profile_enabled: Permission denied
+cat: '/sys/kernel/tracing/trace_stat/function*': No such file or directory
+./run-guest.sh: line 21: /sys/kernel/tracing/function_profile_enabled: Permission denied
+./run-guest.sh: line 22: /sys/kernel/tracing/function_profile_enabled: Permission denied
+epoll senders=12 secs=3.1 sent=1040245 got=352520 rcvbuf_errors=687725 epoll_waits=5393 dgram/wait=65.4
+./run-guest.sh: line 24: /sys/kernel/tracing/function_profile_enabled: Permission denied
+cat: '/sys/kernel/tracing/trace_stat/function*': No such file or directory
+## T1b: exclusive waiters (threads blocked in recv)
+block senders=6 receivers=4 secs=3.6 sent=120835 got=120835 rcvbuf_errors=0 unaccounted=0 late_wakeups=0 per_rx=30586,30185,30387,29677
+block senders=2 receivers=4 secs=3.6 sent=23401 got=23401 rcvbuf_errors=0 unaccounted=0 late_wakeups=0 per_rx=5831,5845,5949,5776
+block senders=6 receivers=4 secs=3.6 sent=123426 got=123426 rcvbuf_errors=0 unaccounted=0 late_wakeups=0 per_rx=31019,30776,30901,30730
+block senders=2 receivers=4 secs=3.6 sent=24521 got=24521 rcvbuf_errors=0 unaccounted=0 late_wakeups=0 per_rx=6132,6206,6121,6062
+## T1c: kernel instructions per datagram (perf counts, 3 runs each)
+epoll senders=1 secs=3.0 sent=73223 got=73223 rcvbuf_errors=0 epoll_waits=16369 dgram/wait=4.5
+    senders=1 instructions:k  per datagram 11849.1
+    senders=1 cycles:k        per datagram 25949.9
+epoll senders=1 secs=3.0 sent=78390 got=78390 rcvbuf_errors=0 epoll_waits=17633 dgram/wait=4.4
+    senders=1 instructions:k  per datagram 11889.8
+    senders=1 cycles:k        per datagram 25111.8
+epoll senders=1 secs=3.0 sent=70439 got=70439 rcvbuf_errors=0 epoll_waits=16269 dgram/wait=4.3
+    senders=1 instructions:k  per datagram 11892.6
+    senders=1 cycles:k        per datagram 27132.7
+epoll senders=6 secs=3.1 sent=363788 got=248224 rcvbuf_errors=115564 epoll_waits=3772 dgram/wait=65.8
+    senders=6 instructions:k  per datagram 13720.6
+    senders=6 cycles:k        per datagram 27284.1
+epoll senders=6 secs=3.1 sent=334204 got=246685 rcvbuf_errors=87519 epoll_waits=3748 dgram/wait=65.8
+    senders=6 instructions:k  per datagram 12862.9
+    senders=6 cycles:k        per datagram 26113.2
+epoll senders=6 secs=3.1 sent=565889 got=355717 rcvbuf_errors=210172 epoll_waits=5452 dgram/wait=65.2
+    senders=6 instructions:k  per datagram 14638.8
+    senders=6 cycles:k        per datagram 27905.2
+## T2a: uncontended epoll (eventfd write + epoll_wait + read, 1 thread)
+    instructions:k           per iter 2782.08
+    cycles:k                 per iter 7220.47
+    L1-dcache-load-misses    per iter 141.67
+    instructions:k           per iter 2782.03
+    cycles:k                 per iter 6937.40
+    L1-dcache-load-misses    per iter 135.20
+    instructions:k           per iter 2781.11
+    cycles:k                 per iter 7184.65
+    L1-dcache-load-misses    per iter 135.37
+    instructions:k           per iter 2785.93
+    cycles:k                 per iter 7219.79
+    L1-dcache-load-misses    per iter 138.99
+    instructions:k           per iter 2785.47
+    cycles:k                 per iter 7307.23
+    L1-dcache-load-misses    per iter 135.83
+## T2b: contended epoll (4 and 12 writer threads, 1 epoll_wait thread)
+multi writers=4 callbacks=1680889 events=257823 epoll_waits=70999
+    writers=4 instructions:k           per callback 1301.66
+    writers=4 cycles:k                 per callback 3784.10
+    writers=4 L1-dcache-load-misses    per callback 69.61
+multi writers=4 callbacks=1664480 events=256895 epoll_waits=70519
+    writers=4 instructions:k           per callback 1308.99
+    writers=4 cycles:k                 per callback 3845.46
+    writers=4 L1-dcache-load-misses    per callback 68.19
+multi writers=4 callbacks=1717660 events=255682 epoll_waits=70200
+    writers=4 instructions:k           per callback 1295.61
+    writers=4 cycles:k                 per callback 3711.93
+    writers=4 L1-dcache-load-misses    per callback 67.21
+multi writers=12 callbacks=1840565 events=62558 epoll_waits=5298
+    writers=12 instructions:k           per callback 2033.96
+    writers=12 cycles:k                 per callback 9300.85
+    writers=12 L1-dcache-load-misses    per callback 73.99
+multi writers=12 callbacks=1764091 events=58366 epoll_waits=7467
+    writers=12 instructions:k           per callback 1747.98
+    writers=12 cycles:k                 per callback 7557.96
+    writers=12 L1-dcache-load-misses    per callback 71.64
+multi writers=12 callbacks=1909692 events=64989 epoll_waits=5517
+    writers=12 instructions:k           per callback 1979.48
+    writers=12 cycles:k                 per callback 8970.41
+    writers=12 L1-dcache-load-misses    per callback 74.34

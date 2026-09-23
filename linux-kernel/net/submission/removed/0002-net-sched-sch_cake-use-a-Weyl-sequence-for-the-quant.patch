@@ -1,0 +1,71 @@
+From 3c47f847e7f07a1f3037f76665987713adcc960b Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:33:59 +0200
+Subject: [RFC PATCH net-next 2/4] net/sched: sch_cake: use a Weyl sequence for
+ the quantum dither
+
+cake_get_flow_quantum() adds get_random_u16() to
+flow_quantum * quantum_div[host_load] before the shift, so that the
+rounding does not accumulate in one direction.  It runs at every DRR
+deficit refill and when a flow becomes active, under the qdisc lock.
+With n bulk flows behind one host the quantum is about flow_quantum / n,
+so a packet of length L costs about L * n / flow_quantum refills.
+
+The dither has to be spread uniformly over [0, 65535], not be
+unpredictable.  An additive sequence with an odd step visits every
+16-bit value once per 65536 steps.  Keep one per tin and step it by
+0x9e37 instead of calling get_random_u16().  The u16 goes into the hole
+after flow_quantum, which cake_get_flow_quantum() reads anyway, so
+struct cake_tin_data does not grow (pahole).
+
+Not measured: neither the cost of get_random_u16() on this path nor the
+resulting change.
+
+Tested: sch_cake.o builds without warnings (W=1) on x86_64.
+
+Assisted-by: Claude pahole
+---
+Impact: low -- CAKE with many bulk flows behind one host.  Not
+demonstrated: no measurement of get_random_u16() on this path.
+
+- One sequence is shared by all flows of a tin, so with n flows served
+  in turn each flow sees every n-th value.  For n a power of two that is
+  a fixed residue class, which biases the dither by at most n/65536 of
+  a byte per refill.
+
+ net/sched/sch_cake.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/net/sched/sch_cake.c b/net/sched/sch_cake.c
+index a8836a30b9e6..88a9a843c037 100644
+--- a/net/sched/sch_cake.c
++++ b/net/sched/sch_cake.c
+@@ -155,6 +155,7 @@ struct cake_tin_data {
+ 	u16	overflow_idx[CAKE_QUEUES];
+ 	struct cake_host hosts[CAKE_QUEUES]; /* for triple isolation */
+ 	u16	flow_quantum;
++	u16	quantum_dither;	/* see cake_get_flow_quantum() */
+ 
+ 	struct cobalt_params cparams;
+ 	u32	drop_overlimit;
+@@ -700,11 +701,14 @@ static u16 cake_get_flow_quantum(struct cake_tin_data *q,
+ 		host_load = max(host_load,
+ 				q->hosts[flow->dsthost].dsthost_bulk_flow_count);
+ 
+-	/* The get_random_u16() is a way to apply dithering to avoid
+-	 * accumulating roundoff errors
++	/* Dither to avoid accumulating roundoff errors.  An additive
++	 * (Weyl) sequence spreads the dither uniformly over [0, 65535],
++	 * which is all the correction needs.
+ 	 */
++	q->quantum_dither += 0x9e37U;
++
+ 	return (q->flow_quantum * quantum_div[host_load] +
+-		get_random_u16()) >> 16;
++		q->quantum_dither) >> 16;
+ }
+ 
+ static u32 cake_hash(struct cake_tin_data *q, const struct sk_buff *skb,
+-- 
+2.53.0
+

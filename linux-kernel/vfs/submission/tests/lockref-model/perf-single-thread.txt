@@ -1,0 +1,10 @@
+old insn/pair 58.01 cycles/pair 30.14
+new insn/pair 51.01 cycles/pair 28.47
+old insn/pair 58.01 cycles/pair 29.82
+new insn/pair 51.01 cycles/pair 28.43
+old insn/pair 58.01 cycles/pair 29.75
+new insn/pair 51.01 cycles/pair 28.56
+old insn/pair 58.01 cycles/pair 30.00
+new insn/pair 51.01 cycles/pair 27.98
+old insn/pair 58.01 cycles/pair 29.46
+new insn/pair 51.01 cycles/pair 28.16

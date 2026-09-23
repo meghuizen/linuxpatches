@@ -1,0 +1,97 @@
+From f6c6f3cb5ee902c2ab3f77b79b3ba38db07831e3 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:20:40 +0200
+To: netdev@vger.kernel.org
+Cc: Eric Dumazet <edumazet@google.com>, Paolo Abeni <pabeni@redhat.com>,
+    Willem de Bruijn <willemb@google.com>,
+    Kuniyuki Iwashima <kuniyu@google.com>,
+    "David S. Miller" <davem@davemloft.net>,
+    Jakub Kicinski <kuba@kernel.org>, Simon Horman <horms@kernel.org>,
+    Ingo Molnar <mingo@redhat.com>, Peter Zijlstra <peterz@infradead.org>,
+    Juri Lelli <juri.lelli@redhat.com>,
+    Vincent Guittot <vincent.guittot@linaro.org>,
+    Dietmar Eggemann <dietmar.eggemann@arm.com>,
+    Steven Rostedt <rostedt@goodmis.org>, Ben Segall <bsegall@google.com>,
+    Mel Gorman <mgorman@suse.de>, Valentin Schneider <vschneid@redhat.com>,
+    K Prateek Nayak <kprateek.nayak@amd.com>,
+    linux-kernel@vger.kernel.org
+Subject: [PATCH net-next 0/1] udp: one wakeup per drained receive batch
+
+Since commit b650bf0977d3 ("udp: remove busylock and add per NUMA
+queues"), a UDP receive can move several skbs to sk_receive_queue at
+once when several CPUs deliver to the same socket, and it then calls
+sk_data_ready() once per skb. With a poll/epoll waiter on the socket,
+that runs the waitqueue walk and ep_poll_callback() nb times for one
+change of state. This patch wakes the socket once with
+nr_exclusive = nb, so blocking readers still get up to nb wakeups but
+poll/epoll entries are called once.
+
+Measured on the patched kernel in an x86_64 guest (2 boots, 9 base
+boots): ep_poll_callback() calls per datagram go from 1.00 to 0.87-0.91
+with 6 senders and to 0.45-0.47 with 12; unchanged with 1 sender. At
+the same offered load the patched kernel drops no more datagrams than
+the base kernel, and blocking readers lose no datagram and get no late
+wakeup. The question for reviewers is whether this is worth a new
+wakeup helper.
+
+  # | summary                          | impact             | evidence
+  --+----------------------------------+--------------------+-----------
+  1 | udp: one sk_data_ready call per  | medium: a UDP      | measured
+    | drained batch (adds              | socket fed by      | (call
+    | __wake_up_sync_key_nr())         | several CPUs       | counts)
+
+Two other patches from the same work are not in this posting:
+- "eventpoll: keep the fields ep_poll_callback() writes in one
+  cacheline" was dropped: no measurable difference in cycles or L1
+  misses per callback.
+- "ipv4: send IP ID 0 for connected non-TCP atomic datagrams" was
+  dropped: it changes the IP ID on the wire for an unmeasured saving,
+  and restarting the ID at 0 on every UDP GSO send would stop receive
+  GRO merging across sends.
+
+Testing:
+- Builds with W=1 (net/core/sock.o, net/ipv4/udp.o, net/ipv6/udp.o,
+  kernel/sched/build_utility.o, net/core/skmsg.o, net/sunrpc/xprtsock.o),
+  x86_64. sock_def_readable() disassembles to the same code as before
+  apart from one register load (nr_exclusive = 1).
+- On the unpatched host kernel (6.18): bpftrace count of
+  sock_def_readable() calls per __udp_enqueue_schedule_skb() call with
+  1-24 senders into one socket (table in the patch), and a check that
+  4 threads blocked in recv() on one socket lose no datagrams and see no
+  late wakeup. These validate the test program only.
+- On the patched kernel (x86_64 guest, nested KVM, 16 vCPUs): the
+  ep_poll_callback() counts above (2 boots); the blocking-reader check
+  (2 boots, 4 runs each); a fixed-rate test, 12 senders at 50k-200k
+  datagrams/s, 3 boots of each kernel interleaved, comparing drops and
+  receiver CPU time per datagram. No kernel warnings.
+
+Not tested:
+- Hardware other than a nested KVM guest; wall-clock throughput;
+  sockmap/sunrpc UDP sockets (code path unchanged); O_ASYNC; IPv6.
+- Not rebased on or tested against net-next; base is v7.3-rc3
+  (518e5b794c06).
+- No selftest added.
+
+Tool assistance: the changes, changelogs and measurements in this
+series were produced with Claude (Anthropic, claude-opus-5-5) as a
+coding assistant, prompted to find and fix performance problems in the
+client-side networking path and to measure them. The patch carries an
+Assisted-by tag.
+
+Signed-off-by: <submitter adds before sending>
+
+Michiel (1):
+  udp: wake a drained batch of datagrams with one sk_data_ready call
+
+ include/linux/wait.h |  4 ++++
+ include/net/sock.h   |  1 +
+ kernel/sched/wait.c  | 21 +++++++++++++++++++++
+ net/core/sock.c      | 41 ++++++++++++++++++++++++++++++++++++++---
+ net/ipv4/udp.c       |  8 ++------
+ 5 files changed, 66 insertions(+), 9 deletions(-)
+
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
+-- 
+2.53.0
+

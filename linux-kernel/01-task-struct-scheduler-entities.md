@@ -1,5 +1,9 @@
 # Task 1 — Keep the scheduler's hot fields together in `task_struct`
 
+> Status (measured 2026-09-23): not submitted. The successor patch, the EEVDF
+> `sched_entity` reorder, was measured alone on v7.3-rc3: no difference beyond the
+> base spread, removed. See [`sched/submission/REVIEW.md`](sched/submission/REVIEW.md).
+
 **What the patch does, in one sentence:** it moves 504 bytes of data that a normal task never uses (`rt`, `dl`, `scx`) out from between two fields the scheduler reads on every context switch (`se` and `sched_class`), so the scheduler touches ~5 cache lines instead of ~12.
 
 | | |
@@ -8,7 +12,7 @@
 | Kernel | Linux 7.2, vanilla, `/mnt/data/linux-src/linux-7.2` |
 | Patch size | Stage A: reorder only, ~10 lines. Stage B: ~89 call sites + lifetime code |
 | Risk | Stage A: low. Stage B: medium |
-| Realistic gain | Low single-digit percent on context-switch-heavy workloads |
+| Realistic gain | Estimated before measurement: low single-digit percent on context-switch-heavy workloads. Not shown. |
 
 ---
 
@@ -164,7 +168,7 @@ Honest scope: ~89 mechanical edits plus ~60 lines of real logic in `kernel/sched
 
 ## 5. Who benefits (use cases)
 
-The win is per context switch, so it scales with switch rate:
+The expected win (not shown at runtime; see the status note) is per context switch, so it would scale with switch rate:
 
 - **High: message-passing and pipeline workloads.** Web servers behind a reverse proxy, databases with worker pools, anything measured well by `perf bench sched pipe`. Hundreds of thousands of switches per second.
 - **High: oversubscribed hosts.** Kubernetes nodes and CI runners with far more runnable threads than cores.
@@ -266,7 +270,7 @@ Signed-off-by: Your Name <you@example.com>
 
 ## 9. Realistic expectation
 
-Low single-digit percent on switch-heavy benchmarks; possibly nothing on anything else. The honest case for the patch is cost, not drama: ten reordered lines, no behaviour change, verified safe against every offset consumer — for a permanent reduction of the scheduler's hot-path footprint.
+Estimated before measurement: low single-digit percent on switch-heavy benchmarks, possibly nothing on anything else. No runtime gain has been shown (see the status note at the top). The case for the patch is its cost: ten reordered lines, no behaviour change, verified safe against every offset consumer — for a permanent reduction of the scheduler's hot-path footprint.
 
 ---
 

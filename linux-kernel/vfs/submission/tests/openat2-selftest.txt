@@ -1,0 +1,33 @@
+Host: 6.18.40.1-microsoft-standard-WSL2 (WSL2), selftests built from /usr/src/sub-vfs
+
+## before the patch (base 518e5b794c06):
+$ make -C tools/testing/selftests TARGETS=openat2 all
+make[1]: *** No targets specified and no makefile found.  Stop.
+make: *** [Makefile:223: all] Error 2
+
+## after the patch:
+$ make -C tools/testing/selftests TARGETS=filesystems/openat2 O=<dir> all   -> builds openat2_test resolve_test rename_attack_test emptypath_test
+
+$ ./openat2_test
+ok 1 global.legacy_openat_ignores_o_regular
+ok 2 openat2.struct_argument_sizes
+ok 3 openat2.flag_validation
+not ok 4 openat2.regular_flag
+# Totals: pass:3 fail:1 xfail:0 xpass:0 skip:0 error:0
+$ ./resolve_test
+ok 1 openat2_resolve.resolve_beneath
+ok 2 openat2_resolve.resolve_in_root
+ok 3 openat2_resolve.resolve_no_xdev
+ok 4 openat2_resolve.resolve_no_magiclinks
+ok 5 openat2_resolve.resolve_no_symlinks
+# Totals: pass:5 fail:0 xfail:0 xpass:0 skip:0 error:0
+$ ./rename_attack_test
+ok 1 rename_attack.resolve_beneath.test
+ok 2 rename_attack.resolve_in_root.test
+# Totals: pass:2 fail:0 xfail:0 xpass:0 skip:0 error:0
+$ ./emptypath_test
+ok 1 emptypath.without_flag_returns_enoent
+not ok 2 emptypath.reopens_opath_fd
+# Totals: pass:1 fail:1 xfail:0 xpass:0 skip:0 error:0
+
+The two failures (openat2.regular_flag, emptypath.reopens_opath_fd) test O_REGULAR and O_EMPTYPATH, which the 6.18 host kernel does not have. They are expected to pass on a 7.3 kernel; not verified (needs a boot, see TESTS-TO-RUN.md T2).

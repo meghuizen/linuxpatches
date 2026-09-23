@@ -1,0 +1,150 @@
+From fd9054e6a590249ca7701088dd20115976407bd5 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 10:33:57 +0200
+Subject: [RFC PATCH net-next 1/2] net/sched: sch_cake: add a timer slack
+ attribute
+
+cake_enqueue() and cake_dequeue() arm the qdisc watchdog with
+qdisc_watchdog_schedule_ns(), i.e. with zero hrtimer slack, whenever
+the shaper holds the next packet back.  sch_fq has TCA_FQ_TIMER_SLACK
+(default 10 us) so that its watchdog can be coalesced with other timer
+expiries.
+
+Add TCA_CAKE_TIMER_SLACK, in nanoseconds, and pass it as the range to
+qdisc_watchdog_schedule_range_ns().  The default is 0, which is the
+current behaviour.  With slack set, a packet can leave up to that much
+later; time_next_packet advances by the serialisation time of each
+packet rather than from the dequeue time, so the shaped rate is kept.
+
+Not measured: stock iproute2 cannot set the attribute.
+
+In the built kernel cake_dequeue() grows from 868 to 871 instructions
+(the slack load).  With the default slack of 0 the timer is armed exactly
+as before.
+
+Tested: sch_cake.o builds without warnings (W=1) on x86_64.
+
+Assisted-by: Claude
+---
+Impact: low -- CAKE shapers where the new attribute is set; nothing
+changes by default.  Not measured.
+
+- Needs an iproute2 counterpart (tc-cake keyword) before anyone can use
+  it; not written yet, which is why this is RFC.
+- cake_policy is parsed with nla_parse_nested_deprecated(); should the
+  new attribute get strict_start_type?
+- An earlier version of this patch passed "next + slack" as the range
+  argument, i.e. an absolute time as the slack.  Measurements taken with
+  that version do not apply to this one.
+
+ include/uapi/linux/pkt_sched.h |  1 +
+ net/sched/sch_cake.c           | 25 ++++++++++++++++++++-----
+ 2 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/include/uapi/linux/pkt_sched.h b/include/uapi/linux/pkt_sched.h
+index 490efd288526..a450c55e93ca 100644
+--- a/include/uapi/linux/pkt_sched.h
++++ b/include/uapi/linux/pkt_sched.h
+@@ -1024,6 +1024,7 @@ enum {
+ 	TCA_CAKE_ACK_FILTER,
+ 	TCA_CAKE_SPLIT_GSO,
+ 	TCA_CAKE_FWMARK,
++	TCA_CAKE_TIMER_SLACK,
+ 	__TCA_CAKE_MAX
+ };
+ #define TCA_CAKE_MAX	(__TCA_CAKE_MAX - 1)
+diff --git a/net/sched/sch_cake.c b/net/sched/sch_cake.c
+index dc93267029e7..a8836a30b9e6 100644
+--- a/net/sched/sch_cake.c
++++ b/net/sched/sch_cake.c
+@@ -204,6 +204,7 @@ struct cake_sched_config {
+ 	u64		target;
+ 	u64		sync_time;
+ 	u32		buffer_config_limit;
++	u32		timer_slack;	/* ns */
+ 	u32		fwmark_mask;
+ 	u16		fwmark_shft;
+ 	s16		rate_overhead;
+@@ -1752,6 +1753,13 @@ static u32 cake_classify(struct Qdisc *sch, struct cake_tin_data **t,
+ 
+ static void cake_reconfigure(struct Qdisc *sch);
+ 
++static void cake_schedule_next(struct cake_sched_data *qd, u64 next)
++{
++	u32 slack = READ_ONCE(qd->config->timer_slack);
++
++	qdisc_watchdog_schedule_range_ns(&qd->watchdog, next, slack);
++}
++
+ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
+ 			struct sk_buff **to_free)
+ {
+@@ -1792,7 +1800,7 @@ static s32 cake_enqueue(struct sk_buff *skb, struct Qdisc *sch,
+ 					    ktime_to_ns(
+ 						   q->failsafe_next_packet));
+ 				sch->qstats.overlimits++;
+-				qdisc_watchdog_schedule_ns(&q->watchdog, next);
++				cake_schedule_next(q, next);
+ 			}
+ 		}
+ 	}
+@@ -2060,7 +2068,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
+ 			       ktime_to_ns(q->failsafe_next_packet));
+ 
+ 		sch->qstats.overlimits++;
+-		qdisc_watchdog_schedule_ns(&q->watchdog, next);
++		cake_schedule_next(q, next);
+ 		return NULL;
+ 	}
+ 
+@@ -2270,7 +2278,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
+ 		u64 next = min(ktime_to_ns(q->time_next_packet),
+ 			       ktime_to_ns(q->failsafe_next_packet));
+ 
+-		qdisc_watchdog_schedule_ns(&q->watchdog, next);
++		cake_schedule_next(q, next);
+ 	} else if (!sch->q.qlen) {
+ 		int i;
+ 
+@@ -2280,8 +2288,7 @@ static struct sk_buff *cake_dequeue(struct Qdisc *sch)
+ 					ktime_add_ns(now,
+ 						     q->tins[i].cparams.target);
+ 
+-				qdisc_watchdog_schedule_ns(&q->watchdog,
+-							   ktime_to_ns(next));
++				cake_schedule_next(q, ktime_to_ns(next));
+ 				break;
+ 			}
+ 		}
+@@ -2323,6 +2330,7 @@ static const struct nla_policy cake_policy[TCA_CAKE_MAX + 1] = {
+ 	[TCA_CAKE_ACK_FILTER]	 = { .type = NLA_U32 },
+ 	[TCA_CAKE_SPLIT_GSO]	 = { .type = NLA_U32 },
+ 	[TCA_CAKE_FWMARK]	 = { .type = NLA_U32 },
++	[TCA_CAKE_TIMER_SLACK]	 = { .type = NLA_U32 },
+ };
+ 
+ static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
+@@ -2759,6 +2767,10 @@ static int cake_config_change(struct cake_sched_config *q, struct nlattr *opt,
+ 			rate_flags &= ~CAKE_FLAG_SPLIT_GSO;
+ 	}
+ 
++	if (tb[TCA_CAKE_TIMER_SLACK])
++		WRITE_ONCE(q->timer_slack,
++			   nla_get_u32(tb[TCA_CAKE_TIMER_SLACK]));
++
+ 	if (tb[TCA_CAKE_FWMARK]) {
+ 		WRITE_ONCE(q->fwmark_mask, nla_get_u32(tb[TCA_CAKE_FWMARK]));
+ 		WRITE_ONCE(q->fwmark_shft,
+@@ -2974,6 +2986,9 @@ static int cake_config_dump(struct cake_sched_config *q, struct sk_buff *skb)
+ 			!!(rate_flags & CAKE_FLAG_SPLIT_GSO)))
+ 		goto nla_put_failure;
+ 
++	if (nla_put_u32(skb, TCA_CAKE_TIMER_SLACK, READ_ONCE(q->timer_slack)))
++		goto nla_put_failure;
++
+ 	if (nla_put_u32(skb, TCA_CAKE_FWMARK, READ_ONCE(q->fwmark_mask)))
+ 		goto nla_put_failure;
+ 
+-- 
+2.53.0
+

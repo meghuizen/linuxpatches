@@ -1,0 +1,14 @@
+# sock_def_readable() disassembly, base vs patch 1 (addresses stripped)
+17c17,18
+< mov    $0xc3,%edx
+---
+> mov    $0xc3,%ecx
+> mov    $0x1,%edx
+48c49
+< data16 cs nopw 0x0(%rax,%rax,1)
+---
+> cs nopw 0x0(%rax,%rax,1)
+
+# relocations: base calls __wake_up_sync_key, patched calls __wake_up_sync_key_nr
+R_X86_64_PLT32	__wake_up_sync_key
+R_X86_64_PLT32	__wake_up_sync_key_nr

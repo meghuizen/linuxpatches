@@ -1,0 +1,83 @@
+From 08b6d7b922000ac1d68d5033af153dba269e23a5 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:29:23 +0200
+Subject: [PATCH] fs: move i_fop and i_flctx off the refcount cacheline in
+ struct inode
+
+i_fop is set once at inode setup and read by do_dentry_open() on every
+open() (fs/open.c, f->f_op = fops_get(inode->i_fop)). i_flctx is read on
+file-lock checks. Both currently sit immediately after i_count,
+i_dio_count, i_writecount, i_readcount, i_version and i_sequence, and
+share a cacheline with them.
+
+Those six are written constantly: iget()/iput() do an atomic RMW on
+i_count, and an open for read increments i_readcount on the very same
+path that reads i_fop. So refcount traffic on one CPU invalidates the
+open() path on every other CPU using the inode - the textbook case being
+a shared library or a directory that every job of a parallel build
+stats.
+
+Move both into the read-mostly pointer block next to i_op, i_sb and
+i_mapping. The i_fop/free_inode union moves as a whole: fs/inode.c
+reuses those 8 bytes to stash the destructor once the inode is being
+freed, and keeping them together preserves that without any change.
+
+  before: i_fop @344, i_flctx @352, on the same cacheline as
+          i_count @328 .. i_readcount @340
+  after:  i_fop @64,  i_flctx @72,  with i_op/i_sb/i_mapping
+  sizeof(struct inode) unchanged at 560
+
+No functional change. All access is by field name, so no call site
+changes anywhere in the tree.
+
+Note that struct inode is __randomize_layout, so under
+CONFIG_RANDSTRUCT_FULL the compiler shuffles these fields anyway and
+this patch has no effect.
+
+Based on https://github.com/meghuizen/linuxpatches
+linux-kernel/03-inode-false-sharing.md
+---
+ include/linux/fs.h | 20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/include/linux/fs.h b/include/linux/fs.h
+index 69846ffea3c5..290af5723517 100644
+--- a/include/linux/fs.h
++++ b/include/linux/fs.h
+@@ -787,6 +787,21 @@ struct inode {
+ 	void			*i_security;
+ #endif
+ 
++	/*
++	 * Read-mostly: i_fop is set once at inode setup and read by
++	 * do_dentry_open() on every open(); i_flctx is read on file-lock
++	 * checks. They used to share a cacheline with i_count, i_dio_count,
++	 * i_writecount and i_readcount, which are written constantly, so
++	 * refcount traffic on one CPU invalidated the i_fop read on every
++	 * other CPU sharing the inode. Keep them with the other read-mostly
++	 * pointers instead.
++	 */
++	union {
++		const struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
++		void (*free_inode)(struct inode *);
++	};
++	struct file_lock_context	*i_flctx;
++
+ 	/* Stat data, not accessed from path walking */
+ 	u64			i_ino;
+ 	/*
+@@ -852,11 +867,6 @@ struct inode {
+ #if defined(CONFIG_IMA) || defined(CONFIG_FILE_LOCKING)
+ 	atomic_t		i_readcount; /* struct files open RO */
+ #endif
+-	union {
+-		const struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
+-		void (*free_inode)(struct inode *);
+-	};
+-	struct file_lock_context	*i_flctx;
+ 	struct address_space	i_data;
+ 	union {
+ 		struct list_head	i_devices;
+-- 
+2.53.0
+

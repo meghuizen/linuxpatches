@@ -1,0 +1,41 @@
+add/remove: 0/0 grow/shrink: 20/14 up/down: 203/-300 (-97)
+Function                                     old     new   delta
+task_vruntime_update                         175     223     +48
+reweight_task_fair                           288     321     +33
+enqueue_task_fair                           2615    2636     +21
+requeue_delayed_entity                       500     519     +19
+__dequeue_task                              2947    2963     +16
+reweight_entity                              508     520     +12
+update_se                                   1127    1136      +9
+put_prev_task_fair                           729     738      +9
+throttle_cfs_rq                              568     574      +6
+set_next_buddy                                71      77      +6
+pick_task_fair                              1963    1969      +6
+alloc_fair_sched_group                       577     582      +5
+sched_group_set_idle                         522     525      +3
+__pick_last_entity                            53      56      +3
+attach_entity_load_avg                       578     580      +2
+task_tick_fair                              1363    1364      +1
+propagate_entity_load_avg                    898     899      +1
+init_tg_cfs_entry                            208     209      +1
+init_entity_runnable_average                 123     124      +1
+detach_entity_load_avg                       607     608      +1
+min_vruntime_cb_rotate                       316     313      -3
+entity_eligible                              148     145      -3
+place_entity                                 346     340      -6
+set_next_task_fair                          2188    2180      -8
+__pick_root_entity                            29      18     -11
+__pick_first_entity                           29      18     -11
+update_curr                                  390     375     -15
+update_group_capacity                        556     537     -19
+reweight_eevdf                               551     524     -27
+pick_eevdf                                   535     505     -30
+__enqueue_entity                            1098    1067     -31
+wakeup_preempt_fair                         1169    1125     -44
+entity_lag.isra                              143      98     -45
+__dequeue_entity                            1566    1519     -47
+Total: Before=74229, After=74132, chg -0.13%
+add/remove: 0/0 grow/shrink: 1/0 up/down: 3/0 (3)
+Function                                     old     new   delta
+task_sched_runtime                           329     332      +3
+Total: Before=236923, After=236926, chg +0.00%

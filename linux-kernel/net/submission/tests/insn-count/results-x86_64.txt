@@ -1,0 +1,6 @@
+mode               base    patched
+foh-plain        321.00     276.00
+foh-encap        321.00     353.00
+sip39            267.00
+sip2u64          175.00
+null              11.00

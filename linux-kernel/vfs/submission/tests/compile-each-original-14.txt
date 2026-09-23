@@ -1,0 +1,60 @@
+=== 5ef14d0f964c fs: hand the path walk's dentry reference to the opened file
+    fs/namei.o                         rc=0 warnings/errors=0
+    fs/open.o                          rc=0 warnings/errors=0
+    fs/stat.o                          rc=0 warnings/errors=0
+=== 869328f9f734 fs: allocate the struct file only once an open can no longer fail cheaply
+    fs/namei.o                         rc=0 warnings/errors=0
+=== 5bf8acb86d4b lsm: add inode_getattr_rcu, the rcu-walk counterpart of inode_getattr
+    fs/file_table.o                    rc=0 warnings/errors=0
+    kernel/bpf/bpf_lsm.o               rc=0 warnings/errors=0
+    kernel/bpf/trampoline.o            rc=0 warnings/errors=0
+    security/bpf/hooks.o               rc=0 warnings/errors=0
+    security/lsm_init.o                rc=0 warnings/errors=0
+    security/security.o                rc=0 warnings/errors=0
+    security/selinux/hooks.o           rc=0 warnings/errors=0
+=== 0dc47e1454ae selinux: implement inode_getattr_rcu
+    security/selinux/hooks.o           rc=0 warnings/errors=0
+=== 8b417b875d7c fs: answer statx() without leaving rcu-walk when the filesystem allows it
+    fs/file_table.o                    rc=0 warnings/errors=0
+    fs/inode.o                         rc=0 warnings/errors=0
+    fs/namei.o                         rc=0 warnings/errors=0
+    fs/open.o                          rc=0 warnings/errors=0
+    fs/stat.o                          rc=0 warnings/errors=0
+    mm/filemap.o                       rc=0 warnings/errors=0
+=== 3d42c10520d9 ext4: let stat() run ->getattr in rcu-walk
+    fs/ext4/ialloc.o                   rc=0 warnings/errors=0
+    fs/ext4/inode.o                    rc=0 warnings/errors=0
+    fs/ext4/symlink.o                  rc=0 warnings/errors=0
+=== ba26f60d9628 btrfs: let stat() run ->getattr in rcu-walk
+    fs/btrfs/inode.o                   rc=0 warnings/errors=0
+=== 95c47d5716c6 xfs: let stat() run ->getattr in rcu-walk
+    fs/xfs/xfs_iops.o                  rc=2 warnings/errors=1
+        ../fs/xfs/xfs_platform.h:85:10: fatal error: xfs_types.h: No such file or directory
+           85 | #include "xfs_types.h"
+              |          ^~~~~~~~~~~~~
+        compilation terminated.
+=== f6ec830edc4e fs: embed the LSM's per-file blob in the struct file allocation
+    fs/file_table.o                    rc=0 warnings/errors=0
+    security/lsm_init.o                rc=0 warnings/errors=0
+    security/security.o                rc=0 warnings/errors=0
+=== d6933ac87663 selftests: point the openat2 target at where the tests actually live
+=== 398d19770956 lockref: adjust the count with a single addition
+    lib/lockref.o                      rc=0 warnings/errors=0
+=== 08b6d7b92200 fs: move i_fop and i_flctx off the refcount cacheline in struct inode
+    fs/file_table.o                    rc=0 warnings/errors=0
+    fs/inode.o                         rc=0 warnings/errors=0
+    fs/open.o                          rc=0 warnings/errors=0
+    fs/stat.o                          rc=0 warnings/errors=0
+    mm/filemap.o                       rc=0 warnings/errors=0
+=== 93236b75b91b fs: place inode->i_data on a cacheline boundary
+    fs/file_table.o                    rc=0 warnings/errors=0
+    fs/inode.o                         rc=0 warnings/errors=0
+    fs/open.o                          rc=0 warnings/errors=0
+    fs/stat.o                          rc=0 warnings/errors=0
+    mm/filemap.o                       rc=0 warnings/errors=0
+=== 5947391f6f92 fs: regroup struct address_space by read-hot vs write-hot fields
+    fs/file_table.o                    rc=0 warnings/errors=0
+    fs/inode.o                         rc=0 warnings/errors=0
+    fs/open.o                          rc=0 warnings/errors=0
+    fs/stat.o                          rc=0 warnings/errors=0
+    mm/filemap.o                       rc=0 warnings/errors=0

@@ -1,0 +1,329 @@
+# objdump/pahole evidence, objects built from this tree (x86_64 config of the kbench guest; i386 defconfig + conntrack)
+
+## hash_conntrack_raw() x86_64, after 'hash IPv4 tuples as two words'
+00000000000005c0 <hash_conntrack_raw>:
+     5c0:	call   5c5 <hash_conntrack_raw+0x5>
+			5c1: R_X86_64_PLT32	__fentry__-0x4
+     5c5:	push   %rbp
+     5c6:	mov    %rdi,%r9
+     5c9:	mov    %esi,%r8d
+     5cc:	mov    %rsp,%rbp
+     5cf:	and    $0xfffffffffffffff0,%rsp
+     5d3:	sub    $0x40,%rsp
+     5d7:	mov    %gs:0x0(%rip),%r10        # 5df <hash_conntrack_raw+0x1f>
+			5db: R_X86_64_PC32	__ref_stack_chk_guard-0x4
+     5df:	mov    %r10,0x38(%rsp)
+     5e4:	mov    %rdx,%r10
+     5e7:	movq   $0x0,0x20(%rsp)
+     5f0:	movq   $0x0,0x28(%rsp)
+     5f9:	jmp    65b <hash_conntrack_raw+0x9b>
+     5fb:	mov    0x0(%rip),%rax        # 602 <hash_conntrack_raw+0x42>
+			5fe: R_X86_64_PC32	.bss+0xc
+     602:	mov    0x0(%rip),%rdx        # 609 <hash_conntrack_raw+0x49>
+			605: R_X86_64_PC32	.bss+0x14
+     609:	mov    %rax,0x20(%rsp)
+     60e:	mov    0x2c8(%r10),%eax
+     615:	mov    %rdx,0x28(%rsp)
+     61a:	lea    0x20(%rsp),%rdx
+     61f:	xor    %r8,0x20(%rsp)
+     624:	xor    %rax,0x28(%rsp)
+     629:	cmpw   $0x2,0x12(%r9)
+     62f:	je     6d7 <hash_conntrack_raw+0x117>
+     635:	mov    $0x27,%esi
+     63a:	mov    %r9,%rdi
+     63d:	call   642 <hash_conntrack_raw+0x82>
+			63e: R_X86_64_PLT32	__siphash_unaligned-0x4
+     642:	mov    0x38(%rsp),%rdx
+     647:	sub    %gs:0x0(%rip),%rdx        # 64f <hash_conntrack_raw+0x8f>
+			64b: R_X86_64_PC32	__ref_stack_chk_guard-0x4
+     64f:	jne    713 <hash_conntrack_raw+0x153>
+     655:	leave
+     656:	jmp    65b <hash_conntrack_raw+0x9b>
+			657: R_X86_64_PLT32	__x86_return_thunk-0x4
+     65b:	mov    %rdi,0x10(%rsp)
+     660:	lea    0x18(%rsp),%rsi
+     665:	mov    $0x0,%rdi
+			668: R_X86_64_32S	.data..do_once+0x1
+     66c:	mov    %r10,(%rsp)
+     670:	mov    %r8d,0xc(%rsp)
+     675:	movq   $0x0,0x18(%rsp)
+     67e:	call   683 <hash_conntrack_raw+0xc3>
+			67f: R_X86_64_PLT32	__do_once_start-0x4
+     683:	mov    0x10(%rsp),%r9
+     688:	mov    0xc(%rsp),%r8d
+     68d:	test   %al,%al
+     68f:	mov    (%rsp),%r10
+     693:	je     5fb <hash_conntrack_raw+0x3b>
+     699:	mov    $0x10,%esi
+     69e:	mov    $0x0,%rdi
+			6a1: R_X86_64_32S	.bss+0x10
+     6a5:	call   6aa <hash_conntrack_raw+0xea>
+			6a6: R_X86_64_PLT32	get_random_bytes-0x4
+     6aa:	xor    %ecx,%ecx
+     6ac:	mov    $0x0,%rsi
+			6af: R_X86_64_32S	.data
+     6b3:	mov    $0x0,%rdi
+			6b6: R_X86_64_32S	.data..do_once+0x1
+     6ba:	lea    0x18(%rsp),%rdx
+     6bf:	call   6c4 <hash_conntrack_raw+0x104>
+			6c0: R_X86_64_PLT32	__do_once_done-0x4
+     6c4:	mov    (%rsp),%r10
+     6c8:	mov    0xc(%rsp),%r8d
+     6cd:	mov    0x10(%rsp),%r9
+     6d2:	jmp    5fb <hash_conntrack_raw+0x3b>
+     6d7:	movzwl 0x10(%r9),%esi
+     6dc:	movzwl 0x24(%r9),%eax
+     6e1:	mov    (%r9),%edi
+     6e4:	shl    $0x20,%rax
+     6e8:	shl    $0x30,%rsi
+     6ec:	or     %rax,%rsi
+     6ef:	movzbl 0x26(%r9),%eax
+     6f4:	shl    $0x20,%rdi
+     6f8:	or     %rax,%rsi
+     6fb:	mov    0x14(%r9),%eax
+     6ff:	or     $0x200,%rsi
+     706:	or     %rax,%rdi
+     709:	call   70e <hash_conntrack_raw+0x14e>
+			70a: R_X86_64_PLT32	siphash_2u64-0x4
+     70e:	jmp    642 <hash_conntrack_raw+0x82>
+     713:	call   718 <hash_conntrack_raw+0x158>
+			714: R_X86_64_PLT32	__stack_chk_fail-0x4
+     718:	nopl   0x0(%rax,%rax,1)
+
+## hash_conntrack_raw() i386, same commit
+000005b0 <hash_conntrack_raw.constprop.0>:
+     5b0:	push   %ebp
+     5b1:	mov    %esp,%ebp
+     5b3:	sub    $0x38,%esp
+     5b6:	mov    %ebx,-0xc(%ebp)
+     5b9:	mov    %eax,%ebx
+     5bb:	mov    %esi,-0x8(%ebp)
+     5be:	mov    %edi,-0x4(%ebp)
+     5c1:	mov    %fs:0x0,%esi
+			5c4: R_386_32	__ref_stack_chk_guard
+     5c8:	mov    %esi,-0x10(%ebp)
+     5cb:	mov    %edx,%esi
+     5cd:	movl   $0x0,-0x20(%ebp)
+     5d4:	movl   $0x0,-0x1c(%ebp)
+     5db:	movl   $0x0,-0x18(%ebp)
+     5e2:	movl   $0x0,-0x14(%ebp)
+     5e9:	jmp    650 <hash_conntrack_raw.constprop.0+0xa0>
+     5eb:	mov    0x10,%eax
+			5ec: R_386_32	.bss
+     5f0:	xor    %edx,%edx
+     5f2:	mov    %eax,-0x20(%ebp)
+     5f5:	mov    0x14,%eax
+			5f6: R_386_32	.bss
+     5fa:	mov    %eax,-0x1c(%ebp)
+     5fd:	mov    0x18,%eax
+			5fe: R_386_32	.bss
+     602:	mov    %eax,-0x18(%ebp)
+     605:	mov    0x1c,%eax
+			606: R_386_32	.bss
+     60a:	mov    %eax,-0x14(%ebp)
+     60d:	mov    0x170(%esi),%eax
+     613:	xor    %eax,-0x18(%ebp)
+     616:	xor    %edx,-0x14(%ebp)
+     619:	cmpw   $0x2,0x12(%ebx)
+     61e:	je     698 <hash_conntrack_raw.constprop.0+0xe8>
+     620:	lea    -0x20(%ebp),%ecx
+     623:	mov    $0x27,%edx
+     628:	mov    %ebx,%eax
+     62a:	call   62b <hash_conntrack_raw.constprop.0+0x7b>
+			62b: R_386_PC32	__siphash_unaligned
+     62f:	mov    -0x10(%ebp),%edx
+     632:	sub    %fs:0x0,%edx
+			635: R_386_32	__ref_stack_chk_guard
+     639:	jne    6e7 <hash_conntrack_raw.constprop.0+0x137>
+     63f:	mov    -0xc(%ebp),%ebx
+     642:	mov    -0x8(%ebp),%esi
+     645:	mov    -0x4(%ebp),%edi
+     648:	mov    %ebp,%esp
+     64a:	pop    %ebp
+     64b:	ret
+     64c:	lea    0x0(%esi,%eiz,1),%esi
+     650:	movl   $0x0,-0x24(%ebp)
+     657:	lea    -0x24(%ebp),%edx
+     65a:	mov    $0x1,%eax
+			65b: R_386_32	.data..do_once
+     65f:	call   660 <hash_conntrack_raw.constprop.0+0xb0>
+			660: R_386_PC32	__do_once_start
+     664:	test   %al,%al
+     666:	je     5eb <hash_conntrack_raw.constprop.0+0x3b>
+     668:	mov    $0x10,%edx
+     66d:	mov    $0x10,%eax
+			66e: R_386_32	.bss
+     672:	call   673 <hash_conntrack_raw.constprop.0+0xc3>
+			673: R_386_PC32	get_random_bytes
+     677:	lea    -0x24(%ebp),%ecx
+     67a:	mov    $0x0,%edx
+			67b: R_386_32	.data
+     67f:	mov    $0x1,%eax
+			680: R_386_32	.data..do_once
+     684:	movl   $0x0,(%esp)
+     68b:	call   68c <hash_conntrack_raw.constprop.0+0xdc>
+			68c: R_386_PC32	__do_once_done
+     690:	jmp    5eb <hash_conntrack_raw.constprop.0+0x3b>
+     695:	lea    0x0(%esi),%esi
+     698:	lea    -0x20(%ebp),%eax
+     69b:	mov    0x14(%ebx),%esi
+     69e:	mov    (%ebx),%edi
+     6a0:	mov    %eax,0x8(%esp)
+     6a4:	movzwl 0x10(%ebx),%eax
+     6a8:	mov    %eax,%edx
+     6aa:	xor    %eax,%eax
+     6ac:	mov    %eax,-0x2c(%ebp)
+     6af:	shl    $0x10,%edx
+     6b2:	movzwl 0x24(%ebx),%eax
+     6b6:	mov    %edx,-0x28(%ebp)
+     6b9:	mov    -0x28(%ebp),%ecx
+     6bc:	mov    %eax,%edx
+     6be:	mov    -0x2c(%ebp),%eax
+     6c1:	or     %ecx,%edx
+     6c3:	movzbl 0x26(%ebx),%ecx
+     6c7:	xor    %ebx,%ebx
+     6c9:	or     %ebx,%edx
+     6cb:	mov    %edx,0x4(%esp)
+     6cf:	mov    %edi,%edx
+     6d1:	or     %ecx,%eax
+     6d3:	or     $0x200,%eax
+     6d8:	mov    %eax,(%esp)
+     6db:	mov    %esi,%eax
+     6dd:	call   6de <hash_conntrack_raw.constprop.0+0x12e>
+			6de: R_386_PC32	siphash_2u64
+     6e2:	jmp    62f <hash_conntrack_raw.constprop.0+0x7f>
+     6e7:	call   6e8 <hash_conntrack_raw.constprop.0+0x138>
+			6e8: R_386_PC32	__stack_chk_fail
+     6ec:	lea    0x0(%esi,%eiz,1),%esi
+
+## call sites of hash_conntrack_raw(), before/after 'keep the unscaled tuple hashes'
+-- step1-P4
+      1 <__nf_conntrack_confirm>:
+      2 <__nf_ct_delete_from_lists>:
+      2 <nf_conntrack_find_get>:
+      2 <nf_conntrack_hash_check_insert>:
+      1 <nf_conntrack_hash_resize>:
+      2 <nf_conntrack_in>:
+      1 <nf_conntrack_tuple_taken>:
+-- step2-P8
+      1 <__nf_conntrack_confirm>:
+      2 <nf_conntrack_find_get>:
+      2 <nf_conntrack_hash_check_insert>:
+      1 <nf_conntrack_hash_resize>:
+      2 <nf_conntrack_in>:
+      1 <nf_conntrack_tuple_taken>:
+## struct nf_conn, x86_64 before/after
+struct nf_conn {
+	struct nf_conntrack        ct_general __attribute__((__aligned__(4))); /*     0     4 */
+	spinlock_t                 lock __attribute__((__aligned__(4))); /*     4     4 */
+	u32                        timeout;              /*     8     4 */
+	struct nf_conntrack_zone   zone;                 /*    12     4 */
+	struct nf_conntrack_tuple_hash tuplehash[2];     /*    16   112 */
+	/* --- cacheline 2 boundary (128 bytes) --- */
+	long unsigned int          status;               /*   128     8 */
+	possible_net_t             ct_net;               /*   136     8 */
+	struct hlist_node          nat_bysource;         /*   144    16 */
+	struct {
+	} __nfct_init_offset;                            /*   160     0 */
+	struct nf_conn *           master;               /*   160     8 */
+	u_int32_t                  mark;                 /*   168     4 */
+	u_int32_t                  secmark;              /*   172     4 */
+	struct nf_ct_ext *         ext;                  /*   176     8 */
+	union nf_conntrack_proto   proto;                /*   184    64 */
+
+	/* size: 248, cachelines: 4, members: 14 */
+	/* forced alignments: 2 */
+	/* last cacheline: 56 bytes */
+} __attribute__((__aligned__(8)));
+
+struct nf_conn {
+	struct nf_conntrack        ct_general __attribute__((__aligned__(4))); /*     0     4 */
+	spinlock_t                 lock __attribute__((__aligned__(4))); /*     4     4 */
+	u32                        timeout;              /*     8     4 */
+	u32                        hash_raw[2];          /*    12     8 */
+	struct nf_conntrack_zone   zone;                 /*    20     4 */
+	struct nf_conntrack_tuple_hash tuplehash[2];     /*    24   112 */
+	/* --- cacheline 2 boundary (128 bytes) was 8 bytes ago --- */
+	long unsigned int          status;               /*   136     8 */
+	possible_net_t             ct_net;               /*   144     8 */
+	struct hlist_node          nat_bysource;         /*   152    16 */
+	struct {
+	} __nfct_init_offset;                            /*   168     0 */
+	struct nf_conn *           master;               /*   168     8 */
+	u_int32_t                  mark;                 /*   176     4 */
+	u_int32_t                  secmark;              /*   180     4 */
+	struct nf_ct_ext *         ext;                  /*   184     8 */
+	/* --- cacheline 3 boundary (192 bytes) --- */
+	union nf_conntrack_proto   proto;                /*   192    64 */
+
+	/* size: 256, cachelines: 4, members: 15 */
+	/* forced alignments: 2 */
+} __attribute__((__aligned__(8)));
+
+## struct nf_conn, i386 before/after (L1_CACHE_SHIFT=5)
+	struct nf_conntrack_tuple_hash tuplehash[2];     /*    12    96 */
+	/* size: 196, cachelines: 4, members: 12 */
+	u32                        hash_raw[2];          /*    12     8 */
+	struct nf_conntrack_tuple_hash tuplehash[2];     /*    20    96 */
+	/* size: 204, cachelines: 4, members: 13 */
+## flow_offload_hash() x86_64 before/after the dropped flowtable patch
+0000000000000610 <flow_offload_hash>:
+     610:	endbr64
+     614:	call   619 <flow_offload_hash+0x9>
+			615: R_X86_64_PLT32	__fentry__-0x4
+     619:	mov    %edx,%esi
+     61b:	jmp    510 <jhash.constprop.0>
+
+0000000000000310 <flow_offload_hash>:
+     310:	endbr64
+     314:	call   319 <flow_offload_hash+0x9>
+			315: R_X86_64_PLT32	__fentry__-0x4
+     319:	push   %rbp
+     31a:	xor    %esi,%esi
+     31c:	mov    %edx,%ebp
+     31e:	mov    $0x2e,%edx
+     323:	push   %rbx
+     324:	mov    %rdi,%rbx
+     327:	lea    0x2a(%rdi),%rdi
+     32b:	call   330 <flow_offload_hash+0x20>
+			32c: R_X86_64_PLT32	memchr_inv-0x4
+     330:	mov    %ebp,%edx
+     332:	mov    %rbx,%rdi
+     335:	pop    %rbx
+     336:	cmp    $0x1,%rax
+     33a:	pop    %rbp
+     33b:	sbb    %esi,%esi
+     33d:	and    $0xffffffd2,%esi
+     340:	add    $0x58,%esi
+     343:	jmp    10 <jhash>
+     348:	nopl   0x0(%rax,%rax,1)
+
+## cake structs after the net-next patches
+struct cake_sched_config {
+	u64                        rate_bps;             /*     0     8 */
+	u64                        interval;             /*     8     8 */
+	u64                        target;               /*    16     8 */
+	u64                        sync_time;            /*    24     8 */
+	u32                        buffer_config_limit;  /*    32     4 */
+	u32                        timer_slack;          /*    36     4 */
+	u32                        fwmark_mask;          /*    40     4 */
+	u16                        fwmark_shft;          /*    44     2 */
+	s16                        rate_overhead;        /*    46     2 */
+	u16                        rate_mpu;             /*    48     2 */
+	u16                        rate_flags;           /*    50     2 */
+	u8                         tin_mode;             /*    52     1 */
+	u8                         flow_mode;            /*    53     1 */
+	u8                         atm_mode;             /*    54     1 */
+	u8                         ack_filter;           /*    55     1 */
+	u8                         is_shared;            /*    56     1 */
+
+	/* size: 64, cachelines: 1, members: 16 */
+	/* padding: 7 */
+};
+
+	u16                        flow_quantum;         /* 104448     2 */
+	u16                        quantum_dither;       /* 104450     2 */
+	/* size: 104656, cachelines: 1636, members: 36 */
+	/* sum members: 104648, holes: 2, sum holes: 8 */
+	/* size: 104656, cachelines: 1636, members: 35 */
+	/* sum members: 104646, holes: 2, sum holes: 10 */
