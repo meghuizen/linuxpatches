@@ -24,10 +24,13 @@ Going upstream, [`submission/nf-next/`](submission/nf-next/), `[PATCH nf-next 0/
 | 2/3 | 8 | netfilter: conntrack: keep the unscaled tuple hashes for teardown | flush -597 insns/entry (1908 -> 1311, -31%) |
 | 3/3 | 9 | netfilter: conntrack: warn when nf_conntrack_max outgrows the hash table | 8x buckets silent, 9x warns once, non-init netns refused |
 
-Pending, [`submission/net-next/`](submission/net-next/): old 1, CAKE timer
-slack attribute. Slack 0 (the default) is inert. With a 100 Mbit shaper,
-slack 10/50/100 us cut timer expiries by 76/90/91% and kernel insns/pkt by
-16/40/51-56%. Decision open; see [`../SUBMISSION-STATUS.md`](../SUBMISSION-STATUS.md).
+RFC, [`submission/net-next/`](submission/net-next/): old 1, CAKE timer
+slack attribute, now limited to half the AQM target. Slack 0 (the
+default) is inert. With a 100 Mbit shaper and 170-byte frames, slack
+10/50/100 us cut hrtimer expiries per packet from 0.55 to 0.12/0.06/0.05.
+The kernel instruction saving seen in the guest (16/40/51-56%) is mostly
+VM exit cost and is not a bare-metal figure. RFC until iproute2 can set
+the attribute.
 
 Not sent (reasons in [`submission/REVIEW.md`](submission/REVIEW.md)):
 
