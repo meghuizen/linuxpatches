@@ -38,41 +38,25 @@ Instruction counts are reliable; cycles/rates only between adjacent boots.
 | nf | 2 keep unscaled hashes for teardown | flush -597 insns/entry (-31%) | KEEP | nf-next/0002 |
 | nf | 3 warn when max > 8x buckets | 8x silent, 9x warns once, netns refused | KEEP | nf-next/0003 |
 | net | bridge ARP proxy early return | -0.8%, inside spread (rule needed -2%) | REMOVED | net/submission/removed/ |
-| net | CAKE timer slack attribute | see "Open" | PENDING | net/submission/net-next/0001 |
+| net | CAKE timer slack attribute | slack 0 inert (= baseline); 100 Mbit/170 B: expiries/pkt 0.55 -> 0.12/0.06/0.05, arms 1.55 -> 0.99 at 100 us; guest sys+irq CPU/pkt -26..33% at 100 us; rate stays <= configured; bound slack <= target/2 added (Fable review) | KEEP as [RFC PATCH net-next] (needs iproute2); paced over-limit comparison not completed (host throttled) | net/submission/net-next/0001 (branch sub-cake-final in /usr/src/linux-pt-cake, 9475c7fe8c87 amended) |
 | client | udp: one wakeup per drained batch | epoll callbacks/dgram 1.00 -> 0.87-0.91 (6 senders), 0.45-0.47 (12); fixed-rate test: no extra drops at equal load (30 vs 61k of 13.5M) | KEEP, now [PATCH net-next] | client/submission/netdev/0001 |
 | client | eventpoll field layout | inside spread | REMOVED | client/submission/removed/ |
 | sched | EEVDF sched_entity reorder | no difference (512-task L1 +22% was one outlier boot) | REMOVED, no sched series | sched/submission/removed/ |
 
 Series labels now: vfs `[RFC PATCH 0/3]` (RFC because the dentry patch
 overlaps Mateusz Guzik's posted work), nf `[PATCH nf-next 0/3]`, udp
-`[PATCH net-next 0/1]`, CAKE pending.
+`[PATCH net-next 0/1]`, CAKE `[RFC PATCH net-next]` single patch.
 
 ## Open
 
-1. CAKE timer slack. Facts so far:
-   - slack 0 (default) is inert: same timer expiries/insns as baseline.
-   - 100 Mbit shaper: slack 10/50/100 us cut timer expiries 76/90/91%
-     and kernel insns/pkt 16/40/51-56%; achieved rate rises toward
-     100 Mbit (32-69 at slack 0 on this host, 85-97 with slack), never
-     above 100. Ping loss 0% at every slack.
-   - Diagnostics (no perf, unpaced): at slack 0 there is ~1 timer
-     interrupt per packet (~68k/s) which starves the sender on this
-     nested-VM host; with slack the sender floods ~7x the rate and CAKE
-     drops the excess at its 5 MB memory limit. Shaper holds 100 Mbit in
-     all cases; nothing lost before CAKE. Drops/delay differences seen
-     earlier are from different offered load, not slack.
-   - Fable 5.1 review done (scratchpad/cake-analysis/ANALYSIS.md): patch
-     correct and inert at slack 0; configured rate stays an upper bound
-     (cake_advance_shaper advances from the previous time); drops at
-     100 us are overload drops, not slack. Needs: a bound (reject slack >
-     target/2, proposed-fix.diff) and a rewritten changelog (5.5); the
-     -16..-56% insn saving is nested-virt inflated, use expiries/pkt
-     0.55 -> 0.12/0.06/0.05 as the robust number.
-   - Running: paced rerun (1 ms-tick pacing) 4 boots; then T5 (insns per
-     timer wakeup without CAKE) and T4 (bound/netlink tests).
-   - Then: decide KEEP/fix/REMOVE, update the email (currently says
-     untested), net-next cover letter (bridge removed -> CAKE alone, no
-     cover needed for 1 patch).
+1. CAKE: decided with the data at hand (submitter closed the laptop).
+   Email rewritten per the Fable review (cake-analysis/ANALYSIS.md 5.5),
+   value bound added and W=1/checkpatch clean. Not done: a paced
+   over-the-limit comparison of drops/delay (every attempt was host
+   limited: host load, PMU exits with perf, idle-wakeup cost, then
+   thermal throttling), the bound at runtime (TESTS.md T4), T5
+   (instructions per timer wakeup without CAKE). These are listed as
+   not tested in the email.
 2. Final branches, built with `git am` from the exported emails (so the
    commit messages are exactly what is sent; below-`---` notes stay out
    of git), each commit W=1-builds its touched objects with no warnings,

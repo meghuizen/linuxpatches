@@ -1,45 +1,86 @@
-From fd9054e6a590249ca7701088dd20115976407bd5 Mon Sep 17 00:00:00 2001
+From 8f4b11272267312248b0eee812bd5afe1a3d4b4f Mon Sep 17 00:00:00 2001
 From: Michiel <367462+meghuizen@users.noreply.github.com>
-Date: Wed, 23 Sep 2026 10:33:57 +0200
-Subject: [RFC PATCH net-next 1/2] net/sched: sch_cake: add a timer slack
- attribute
+Date: Wed, 23 Sep 2026 10:28:00 +0200
+Subject: [RFC PATCH net-next] net/sched: sch_cake: add a timer slack attribute
 
 cake_enqueue() and cake_dequeue() arm the qdisc watchdog with
 qdisc_watchdog_schedule_ns(), i.e. with zero hrtimer slack, whenever
-the shaper holds the next packet back.  sch_fq has TCA_FQ_TIMER_SLACK
-(default 10 us) so that its watchdog can be coalesced with other timer
-expiries.
+the shaper holds the next packet back.  At 100 Mbit with small frames
+that is close to one timer interrupt per forwarded packet.  sch_fq has
+TCA_FQ_TIMER_SLACK for the same reason.
 
-Add TCA_CAKE_TIMER_SLACK, in nanoseconds, and pass it as the range to
+Add TCA_CAKE_TIMER_SLACK, in nanoseconds, passed as the range to
 qdisc_watchdog_schedule_range_ns().  The default is 0, which is the
-current behaviour.  With slack set, a packet can leave up to that much
-later; time_next_packet advances by the serialisation time of each
-packet rather than from the dequeue time, so the shaped rate is kept.
+current behaviour: qdisc_watchdog_schedule_ns() is that function with a
+range of 0.
 
-Not measured: stock iproute2 cannot set the attribute.
+With slack, the watchdog's soft expiry stays at the shaper time and its
+hard expiry moves <slack> later, so the hrtimer core can run it from an
+earlier interrupt on that CPU and does not reprogram the clock event
+while the requested time stays within the range.  A packet can leave up
+to <slack> later than its shaper time.  time_next_packet advances by the
+packet's serialisation time from its previous value, not from the
+dequeue time, so after such a wait CAKE sends up to rate x slack bytes
+back to back and the configured rate stays an upper bound over any
+window longer than the slack.  The sojourn time COBALT measures grows by
+at most <slack>; the value is therefore limited to half the AQM target
+(2.5 ms with the default target), checked before any setting is written,
+also when a later change lowers the target.
 
-In the built kernel cake_dequeue() grows from 868 to 871 instructions
-(the slack load).  With the default slack of 0 the timer is armed exactly
-as before.
+Measured in an x86_64 KVM guest, two network namespaces joined by veth,
+CAKE at 100 Mbit, 170-byte UDP frames (13.6 us each), 2 to 6 boots per
+point:
 
-Tested: sch_cake.o builds without warnings (W=1) on x86_64.
+  slack                     0      10 us   50 us   100 us
+  hrtimer expiries/packet   0.55   0.12    0.06    0.05
+  hrtimer (re)arms/packet   1.55   1.46    1.16    0.99
 
-Assisted-by: Claude
+With slack 0 the counts equal those of the unpatched kernel.  How much
+CPU this saves depends on the cost of a timer interrupt on the
+platform; in this guest, where each one costs VM exits, system and
+interrupt CPU time per forwarded packet fell by 26-33% at 100 us (one
+boot, three load levels).  On bare
+metal the saving per avoided expiry is expected to be a few
+microseconds.  With MTU-sized frames the timer only coalesces when the
+slack exceeds the frame's serialisation time (12 us at 1 Gbit, 121 us at
+100 Mbit).
+
+cake_dequeue() grows by 4 instructions (one load of the slack) and
+struct cake_sched_config keeps its size.
+
+Tested: sch_cake.o builds without warnings (W=1) on x86_64; the
+counts above were taken on this patch without the value check, which
+is not on the packet path and was not exercised at runtime.
+
+Assisted-by: Claude perf
 ---
-Impact: low -- CAKE shapers where the new attribute is set; nothing
-changes by default.  Not measured.
+Impact: low to medium -- CAKE shapers where the attribute is set, at
+rates where the shaper holds packets back often (small frames, tens to
+hundreds of Mbit); nothing changes by default.
 
-- Needs an iproute2 counterpart (tc-cake keyword) before anyone can use
-  it; not written yet, which is why this is RFC.
-- cake_policy is parsed with nla_parse_nested_deprecated(); should the
-  new attribute get strict_start_type?
-- An earlier version of this patch passed "next + slack" as the range
-  argument, i.e. an absolute time as the slack.  Measurements taken with
-  that version do not apply to this one.
+RFC because iproute2 has no keyword for it yet (a tc-cake "timer_slack"
+option that prints the value only when the kernel dumps it).
+
+Notes:
+- Drops and ping latency in the guest runs are not quoted: with slack
+  the sender, no longer starved by timer interrupts on its vCPU, offered
+  5-9x the shaped rate and CAKE dropped the excess at its memory limit;
+  at slack 0 the sender stayed near the rate.  Delivered plus dropped
+  equalled the packets sent in every run, and no drop happened before
+  CAKE.  A paced comparison at equal load was not completed.
+- The kernel instruction count per packet fell 16/40/51% at 10/50/100
+  us in the guest, mostly VM exit handling of clock event programming;
+  it is not a bare-metal figure.
+- The bound follows the sojourn argument above; a static
+  NLA_POLICY_MAX would also work if coupling to the target is unwanted.
+- An earlier version of this patch passed an absolute time as the
+  range; measurements from that version do not apply.
+- Not tested: the value check at runtime, cake_mq, ingress mode,
+  autorate, architectures other than x86_64, bare metal.
 
  include/uapi/linux/pkt_sched.h |  1 +
- net/sched/sch_cake.c           | 25 ++++++++++++++++++++-----
- 2 files changed, 21 insertions(+), 5 deletions(-)
+ net/sched/sch_cake.c           | 45 ++++++++++++++++++++++++++++++----
+ 2 files changed, 41 insertions(+), 5 deletions(-)
 
 diff --git a/include/uapi/linux/pkt_sched.h b/include/uapi/linux/pkt_sched.h
 index 490efd288526..a450c55e93ca 100644
@@ -54,7 +95,7 @@ index 490efd288526..a450c55e93ca 100644
  };
  #define TCA_CAKE_MAX	(__TCA_CAKE_MAX - 1)
 diff --git a/net/sched/sch_cake.c b/net/sched/sch_cake.c
-index dc93267029e7..a8836a30b9e6 100644
+index dc93267029e7..e0cc58247456 100644
 --- a/net/sched/sch_cake.c
 +++ b/net/sched/sch_cake.c
 @@ -204,6 +204,7 @@ struct cake_sched_config {
@@ -124,7 +165,34 @@ index dc93267029e7..a8836a30b9e6 100644
  };
  
  static void cake_set_rate(struct cake_tin_data *b, u64 rate, u32 mtu,
-@@ -2759,6 +2767,10 @@ static int cake_config_change(struct cake_sched_config *q, struct nlattr *opt,
+@@ -2660,6 +2668,26 @@ static int cake_config_change(struct cake_sched_config *q, struct nlattr *opt,
+ 	if (err < 0)
+ 		return err;
+ 
++	/* The watchdog may fire up to timer_slack late, which adds up to
++	 * that much to the sojourn time COBALT measures.  Keep it below
++	 * half the AQM target so the AQM keeps measuring the queue and not
++	 * the scheduler.  Check before anything is written so a rejected
++	 * change leaves the configuration untouched.
++	 */
++	if (tb[TCA_CAKE_TIMER_SLACK] || tb[TCA_CAKE_TARGET]) {
++		u32 slack = tb[TCA_CAKE_TIMER_SLACK] ?
++			nla_get_u32(tb[TCA_CAKE_TIMER_SLACK]) : q->timer_slack;
++		u64 target = tb[TCA_CAKE_TARGET] ?
++			max(nla_get_u32(tb[TCA_CAKE_TARGET]), 1U) : q->target;
++
++		if (slack > us_to_ns(target) / 2) {
++			NL_SET_ERR_MSG_ATTR(extack,
++					    tb[TCA_CAKE_TIMER_SLACK] ?: tb[TCA_CAKE_TARGET],
++					    "timer slack must not exceed half the AQM target");
++			return -EINVAL;
++		}
++	}
++
+ 	if (tb[TCA_CAKE_NAT]) {
+ #if IS_ENABLED(CONFIG_NF_CONNTRACK)
+ 		flow_mode &= ~CAKE_FLOW_NAT_FLAG;
+@@ -2759,6 +2787,10 @@ static int cake_config_change(struct cake_sched_config *q, struct nlattr *opt,
  			rate_flags &= ~CAKE_FLAG_SPLIT_GSO;
  	}
  
@@ -135,7 +203,7 @@ index dc93267029e7..a8836a30b9e6 100644
  	if (tb[TCA_CAKE_FWMARK]) {
  		WRITE_ONCE(q->fwmark_mask, nla_get_u32(tb[TCA_CAKE_FWMARK]));
  		WRITE_ONCE(q->fwmark_shft,
-@@ -2974,6 +2986,9 @@ static int cake_config_dump(struct cake_sched_config *q, struct sk_buff *skb)
+@@ -2974,6 +3006,9 @@ static int cake_config_dump(struct cake_sched_config *q, struct sk_buff *skb)
  			!!(rate_flags & CAKE_FLAG_SPLIT_GSO)))
  		goto nla_put_failure;
  
@@ -145,6 +213,8 @@ index dc93267029e7..a8836a30b9e6 100644
  	if (nla_put_u32(skb, TCA_CAKE_FWMARK, READ_ONCE(q->fwmark_mask)))
  		goto nla_put_failure;
  
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
 -- 
 2.53.0
 

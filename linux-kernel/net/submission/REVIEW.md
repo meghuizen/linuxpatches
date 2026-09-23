@@ -11,7 +11,7 @@ boots; results in /usr/src/kbench/results/patchtest-* (UTC stamps
 | nf-next 1-3 (pt-nf, 2 boots vs 7 base) | new flow 16845 -> 16686/pkt (-155, below all 21 other boots); stream 14422 -> 14311 (inside spread); flush 1908 -> 1311/entry (-597); all FUNC checks pass (ctnetlink across resize, resize during churn, 8x silent, 9x warns once, non-init netns refused, dmesg clean) | KEEP, RFC dropped: now `[PATCH nf-next]` |
 | net-next bridge (pt-bridge, 2 boots) | ARP flood 20321 -> 20159 insn/frame, -0.8%, inside the 1.7% base spread; its own keep rule needed -2% | REMOVED (no measurable difference), moved to removed/ |
 | net-next Weyl dither, gro offload lookup | not in the campaign. Weyl: ~0.2-1 get_random_u16() per packet vs ~13 us CPU per packet, cannot be measured; gro: only frames without a GRO offload benefit, not reached by any test | REMOVED earlier (no measurable difference possible / not demonstrated), in removed/ |
-| net-next CAKE slack (pt-cake, 2 boots) | slack 0 inert (inside base spread). Boot 1: timer expiries per packet -65% at 50 us, -67% at 100 us; boot 2: no change at any slack, because the 1 Gbit shaper was not the bottleneck in that boot | PENDING: 4 boots at 100 Mbit (shaper always limiting) queued after the campaign |
+| net-next CAKE slack | 100 Mbit (2+6 boots): slack 0 = baseline; expiries/pkt 0.55 -> 0.12/0.06/0.05, arms 1.55 -> 1.46/1.16/0.99; drops seen at 100 us are overload drops (sender no longer starved), not slack; rate never above configured. Fable review: correct, inert by default, needs bound slack <= target/2 (added) | KEEP, `[RFC PATCH net-next]` single patch (iproute2 missing) |
 
 
 The nine original patches were reworked into two series plus two drops.
