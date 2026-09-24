@@ -30,9 +30,9 @@ Instruction counts are reliable; cycles/rates only between adjacent boots.
 
 | area | patch | result | decision | email |
 |---|---|---|---|---|
-| vfs | selftests: build openat2 tests | builds and passes every boot | KEEP 1/3 | vfs/submission/0001 |
-| vfs | fs: hand the walk's dentry ref to the file | 16 procs one file: -38% kernel cycles/open (6741, 7934 vs 11326-13011); single-process open unchanged | KEEP 2/3 | vfs/submission/0002 |
-| vfs | fs: allocate struct file only when needed (V2b) | ENOENT -22% (ext4) / -13% (tmpfs) kernel insns/open; successful open inside base range | KEEP 3/3 | vfs/submission/0003 |
+| vfs | selftests: build openat2 tests | builds and passes every boot | KEEP 1/2 | vfs/submission/0001 |
+| vfs | fs: hand the walk's dentry ref to the file | 16 procs one file: -38% kernel cycles/open (6741, 7934 vs 11326-13011); single-process open unchanged | REMOVED: same change as Mateusz Guzik's v5, queued in vfs.git vfs-7.4.lookup (161ce1e692d0); his also saves the mount ref op, ours adds nothing | vfs/submission/removed/ |
+| vfs | fs: allocate struct file only when needed (V2b) | ENOENT -22% (ext4) / -13% (tmpfs) kernel insns/open; successful open inside base range | KEEP 2/2, rebased on vfs-7.4.lookup (builds W=1 clean there) | vfs/submission/0002 |
 | vfs | lockref: single addition | +-1.3%, inside spread | REMOVED (no measurable difference) | vfs/submission/removed/ |
 | nf | 1 hash IPv4 as two words | new flow -155 insns/pkt (below all 21 other boots) | KEEP | net/submission/nf-next/0001 |
 | nf | 2 keep unscaled hashes for teardown | flush -597 insns/entry (-31%) | KEEP | nf-next/0002 |
@@ -43,8 +43,8 @@ Instruction counts are reliable; cycles/rates only between adjacent boots.
 | client | eventpoll field layout | inside spread | REMOVED | client/submission/removed/ |
 | sched | EEVDF sched_entity reorder | no difference (512-task L1 +22% was one outlier boot) | REMOVED, no sched series | sched/submission/removed/ |
 
-Series labels now: vfs `[RFC PATCH 0/3]` (RFC because the dentry patch
-overlaps Mateusz Guzik's posted work), nf `[PATCH nf-next 0/3]`, udp
+Series labels now: vfs `[PATCH 0/2]` on vfs.git vfs-7.4.lookup (branch
+sub-vfs-final-7.4 in /usr/src/sub-vfs, tip ef5d4767f13a), nf `[PATCH nf-next 0/3]`, udp
 `[PATCH net-next 0/1]`, CAKE `[RFC PATCH net-next]` single patch.
 
 ## Open
@@ -61,7 +61,9 @@ overlaps Mateusz Guzik's posted work), nf `[PATCH nf-next 0/3]`, udp
    commit messages are exactly what is sent; below-`---` notes stay out
    of git), each commit W=1-builds its touched objects with no warnings,
    code identical to the old branches minus the removed patches:
-   sub-vfs-final (in /usr/src/sub-vfs, 3 commits, tip e63e351fd002),
+   sub-vfs-final-7.4 (in /usr/src/sub-vfs, 2 commits on vfs.git
+   vfs-7.4.lookup 161ce1e692d0, tip ef5d4767f13a; the older 3-commit
+   sub-vfs-final on v7.3-rc3 is superseded),
    sub-nf-final (in /usr/src/sub-net, 3 commits, tip 0689b0b51400),
    sub-udp-final (in /usr/src/sub-client, 1 commit, f13187b9a0f8).
    Old branches (sub-vfs, sub-net, sub-client) kept unchanged. CAKE not

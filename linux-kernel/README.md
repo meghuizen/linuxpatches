@@ -23,7 +23,7 @@ measured" section there.
 
 | Area | Contents | For submission |
 |---|---|---|
-| [`vfs/`](vfs/README.md) | The open and stat paths: analysis, Lean proofs | 3 patches ([`vfs/submission/`](vfs/submission/)) |
+| [`vfs/`](vfs/README.md) | The open and stat paths: analysis, Lean proofs | 2 patches on vfs-7.4.lookup ([`vfs/submission/`](vfs/submission/)) |
 | [`net/`](net/README.md) | The router forwarding path, generic `net/` code only | 3 nf-next patches; CAKE timer slack as RFC ([`net/submission/`](net/submission/)) |
 | [`client/`](client/README.md) | The outbound path: what a browser or curl does | 1 UDP patch ([`client/submission/netdev/`](client/submission/netdev/)) |
 | [`sched/`](sched/README.md) | Scheduler cacheline placement | none: the EEVDF reorder was removed, no measurable difference ([`sched/submission/`](sched/submission/)) |

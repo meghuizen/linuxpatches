@@ -9,10 +9,10 @@ tmpfs-umount, dmesg) PASS on every boot.
 
 | patch | result | decision |
 |---|---|---|
-| dentry handoff (now 2/3) | storm 16 procs: 11792 (11326-13011) -> 6741, 7934 kernel cycles/open, -38%; single-process open insns inside spread | KEEP |
-| lazyalloc V2b (now 3/3) | ENOENT ext4 5430 -> 4241, 4201 insns/open (-22%); tmpfs 8952 -> 7790, 7819 (-13%); 16-thread ENOENT -25%; successful open inside base range | KEEP, impact raised to medium |
+| dentry handoff | storm 16 procs: 11792 (11326-13011) -> 6741, 7934 kernel cycles/open, -38% | REMOVED (superseded): Mateusz Guzik's v5 of the same change is queued in vfs.git vfs-7.4.lookup as 161ce1e692d0 (+39% in his will-it-scale run). His version also hands over the mount reference (extra mntget only for O_TRUNC); ours took a new mntget on every open, so ours adds nothing. Series rebased on top of it |
+| lazyalloc V2b (now 2/2, on vfs-7.4.lookup) | ENOENT ext4 5430 -> 4241, 4201 insns/open (-22%); tmpfs 8952 -> 7790, 7819 (-13%); 16-thread ENOENT -25%; successful open inside base range | KEEP, impact raised to medium |
 | lockref single addition (was 2/4) | open/stat insns within +-1.3% (spread 2-4%); expected saving ~20 insns/op is below the ~150 per-boot noise; storm 16 procs 10874, 11816 vs base 11326-13011 | REMOVED (no measurable difference), in removed/. The static saving (3-8 insns per lockref op) is real but below this host's resolution |
-| selftests openat2 (1/3) | tests build and pass on every boot | KEEP |
+| selftests openat2 (1/2) | tests build and pass on every boot | KEEP |
 
 The final 29-boot report prints REGRESSES for lazyalloc on
 vfs.stat.ext4 l1miss_per_op.  That metric is bimodal on every kernel,

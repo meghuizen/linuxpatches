@@ -1,8 +1,8 @@
-From 83c2a4dd679f2300eed812f12dfecf3ac4d5f660 Mon Sep 17 00:00:00 2001
+From ac89671cb93f3e21297008c8a9261ec69ca78c07 Mon Sep 17 00:00:00 2001
 From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Wed, 23 Sep 2026 16:03:02 +0200
-Subject: [RFC PATCH 3/3] fs: allocate the struct file for open() only when it
- is needed
+Subject: [PATCH 2/2] fs: allocate the struct file for open() only when it is
+ needed
 
 path_openat() calls alloc_empty_file() before the path walk and
 fput_close()s the file again when the open fails. Opens of a missing
@@ -18,9 +18,9 @@ otherwise in path_openat() once the walk has succeeded, just before
 do_open(). do_open() itself is unchanged and always gets a file.
 O_TMPFILE and O_PATH opens still allocate up front.
 
-Static analysis (x86-64, gcc 15.2, fs/namei.o, one branch decision per
-conditional, no audit context), instructions executed inside
-path_openat() with open_last_lookups() and do_open() inlined:
+Static analysis (x86-64, gcc 15.2, fs/namei.o on v7.3-rc3, one branch
+decision per conditional, no audit context), instructions executed
+inside path_openat() with open_last_lookups() and do_open() inlined:
 
   path                                       before  after
   O_RDONLY open of a cached regular file        163    163
@@ -35,19 +35,20 @@ plus kmem_cache_alloc/free, security_file_alloc/free,
 mutex_init_generic() and two percpu_counter_add_batch() calls, with
 three locked atomics among them (two on cred->usage, one on f_ref).
 
-Generated code: path_openat() grows from 575 to 630 instructions
-(2507 -> 2693 bytes), lookup_open() shrinks from 496 to 470, and
-fs/namei.o .text grows by 48 bytes. Allocating before do_open(), rather
-than letting do_open() take a NULL file, keeps gcc from duplicating the
-body of do_open() for the file == NULL case.
+Generated code, fs/namei.o on vfs-7.4.lookup: path_openat() grows from
+615 to 672 instructions, lookup_open() shrinks from 512 to 487, and
+.text grows by 48 bytes. Allocating before do_open(), rather than
+letting do_open() take a NULL file, keeps gcc from duplicating the body
+of do_open() for the file == NULL case.
 
 Visible change: at the file-max limit, an open that fails in the walk
 now returns the walk's error instead of ENFILE. An open that would
 succeed still gets ENFILE, before anything is created or truncated.
 
-Runtime, x86-64 guest (nested KVM), this patch alone on the base
-commit, 2 boots interleaved with 8 base boots; kernel instructions per
-open() in a single-process loop (perf stat instructions:k):
+Runtime, x86-64 guest (nested KVM), this patch alone on v7.3-rc3,
+without the preceding dentry change, 2 boots interleaved with 8 base
+boots; kernel instructions per open() in a single-process loop (perf
+stat instructions:k):
 
   test                            base median (range)    patched
   ENOENT, ext4 negative dentry    5430 (5377-5617)       4241, 4201
@@ -67,6 +68,10 @@ Tested by compiling fs/namei.o with W=1 and by the runtime run above.
 
 Assisted-by: Claude
 ---
+Applies on vfs-7.4.lookup (on top of 161ce1e692d0, "fs: avoid spurious
+dentry ref/unref cycle on open"); it also applies to v7.3-rc3 alone,
+where the runtime numbers were taken.
+
 Impact: medium -- opens that fail during the path walk (ENOENT from
 compilers, loaders and interpreters probing search paths; ENOTDIR,
 ELOOP, ENAMETOOLONG; -ECHILD/-ESTALE retries).  The successful open path
@@ -90,7 +95,7 @@ users, the cost of O_CREAT at runtime.
  1 file changed, 47 insertions(+), 15 deletions(-)
 
 diff --git a/fs/namei.c b/fs/namei.c
-index 4219484ed328..cf50c37ce2f6 100644
+index cffc98f50f3e..66ac89b2083c 100644
 --- a/fs/namei.c
 +++ b/fs/namei.c
 @@ -4426,6 +4426,9 @@ static struct dentry *atomic_open(const struct path *path, struct dentry *dentry
@@ -160,7 +165,7 @@ index 4219484ed328..cf50c37ce2f6 100644
  		dput(nd->path.dentry);
  		nd->path.dentry = dentry;
  		return NULL;
-@@ -4988,22 +5006,35 @@ static int do_o_path(struct nameidata *nd, unsigned flags, struct file *file)
+@@ -4989,22 +5007,35 @@ static int do_o_path(struct nameidata *nd, unsigned flags, struct file *file)
  static struct file *path_openat(struct nameidata *nd,
  			const struct open_flags *op, unsigned flags)
  {
@@ -206,7 +211,7 @@ index 4219484ed328..cf50c37ce2f6 100644
  		if (!error)
  			error = do_open(nd, file, op);
  		terminate_walk(nd);
-@@ -5014,7 +5045,8 @@ static struct file *path_openat(struct nameidata *nd,
+@@ -5015,7 +5046,8 @@ static struct file *path_openat(struct nameidata *nd,
  		WARN_ON(1);
  		error = -EINVAL;
  	}

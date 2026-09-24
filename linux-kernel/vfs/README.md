@@ -30,15 +30,19 @@ boots, 2 rounds, 9 baseline boots; see
 
 | # | patch | measured result |
 |---|---|---|
-| 1/3 | selftests: build and run the openat2 tests again | builds and passes every boot |
-| 2/3 | fs: hand the path walk's dentry reference to the opened file | 16 processes opening one file: -38% kernel cycles/open (6741, 7934 vs base 11326-13011); single-process open unchanged |
-| 3/3 | fs: allocate the struct file for open() only when it is needed | failed open (ENOENT): -22% kernel instructions/open on ext4, -13% on tmpfs; successful open inside the base range |
+| 1/2 | selftests: build and run the openat2 tests again | builds and passes every boot |
+| 2/2 | fs: allocate the struct file for open() only when it is needed | failed open (ENOENT): -22% kernel instructions/open on ext4, -13% on tmpfs; successful open inside the base range |
+
+The series is based on vfs.git `vfs-7.4.lookup`, on top of Mateusz
+Guzik's "fs: avoid spurious dentry ref/unref cycle on open"
+(161ce1e692d0), queued for Linux 7.4.
 
 Removed (in [`submission/removed/`](submission/removed/), reasons in
 [`submission/REVIEW.md`](submission/REVIEW.md)):
 
 | old # | patch | reason |
 |---|---|---|
+| 1 | fs: hand the path walk's dentry reference to the opened file | superseded: the same change by Mateusz Guzik is queued in vfs.git (161ce1e692d0) and also saves the mount reference operation. Our measurement of the idea: -38% kernel cycles/open with 16 processes on one file |
 | 11 | lockref: adjust the count with a single addition | no measurable difference: open/stat instructions within +-1.3%, inside the 2-4% spread |
 | 3-8 | rcu-walk statx (lsm, selinux, fs, ext4, btrfs, xfs) | bug: NULL dereference race under `rcu_read_lock()`; also skips `security_inode_getattr()` |
 | 9 | embed the LSM per-file blob in the struct file allocation | regression: +40 bytes per open file with AppArmor/Landlock (filp 192 -> 256) |
