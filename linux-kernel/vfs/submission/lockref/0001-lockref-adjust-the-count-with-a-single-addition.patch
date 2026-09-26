@@ -1,13 +1,12 @@
-From 77d37d9769a41fede7087a834efb639042dd0860 Mon Sep 17 00:00:00 2001
+From 30ea4a7285314cfa889430b97c94eca69c603354 Mon Sep 17 00:00:00 2001
 From: Michiel <367462+meghuizen@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:29:23 +0200
 Subject: [PATCH] lockref: adjust the count with a single addition
 
 The cmpxchg fast paths in lib/lockref.c work on a copy of the 64-bit
 lock_count word but update it with new.count++ or new.count--.  On a
-64-bit target the compiler then extracts the 32-bit count, adjusts it
-and inserts it again before the cmpxchg.  x86-64, gcc 15.2,
-lockref_get():
+64-bit target the compiler extracts the 32-bit count, adjusts it and
+inserts it again before the cmpxchg.  x86-64, gcc 15.2, lockref_get():
 
   before                         after
     mov    %rax,%rdx               movabs $0x100000000,%rdx
@@ -28,12 +27,11 @@ conditional variants return before storing such a result, and
 lockref_get() requires a held reference, so its count is at least 1.
 
 32-bit targets keep the plain int update: there the two halves are
-already separate registers, and the 64-bit add only costs moves around
-cmpxchg8b (i386: lockref_get() 42 -> 51 instructions with the word
-form; unchanged with this patch).
+already separate registers, and the 64-bit add only adds moves around
+cmpxchg8b (i386 lockref_get(): 42 -> 51 instructions with the word
+form, 42 with this patch).
 
-Instructions per function in lib/lockref.o, gcc 15.2, base -> patched
-(x86-64 with the test kernel's config, the others defconfig):
+Instructions per function in lib/lockref.o, gcc 15.2, before -> after:
 
                         x86-64    arm64     riscv64   i386
   lockref_get           27 -> 19  39 -> 34  47 -> 44  42 -> 42
@@ -43,42 +41,31 @@ Instructions per function in lib/lockref.o, gcc 15.2, base -> patched
   lockref_put_return    24 -> 21  31 -> 30  45 -> 43  48 -> 48
 
 The i386 object is identical to the unpatched one.  A big-endian
-aarch64 compile (-mbig-endian) of a userspace copy of the loop gives
-the same counts as little-endian, with "add x3, x1, #1" as the update.
+aarch64 build of the loop (-mbig-endian) gives the same counts as
+little-endian, with "add x3, x1, #1" as the update.
 
-A userspace copy of the loop (single thread, uncontended, AMD Ryzen 9
-8940HX, perf stat, 3 x 5*10^7 get+put pairs, runs interleaved) goes
-from 58.0 to 51.0 instructions and from 29.3 to 26.9 cycles per pair.
-In a kernel booted with this patch alone, kernel instructions per
-open() and per stat() were within the boot-to-boot spread of the
-unpatched kernel (about 1%, 2 boots against 9): the saving is a few
-instructions out of several thousand per call.
+Tested: lib/lockref.o builds without warnings (W=1) on x86-64 and
+builds for i386, arm64 and riscv64.  A check of both update forms for
+counts around -128, -1, 0, 1 and INT_MAX with several lock-half values,
+run on x86-64 and under qemu-user for aarch64 little- and big-endian
+and riscv64, finds the words equal in every case except the two
+big-endian cases named above.  s390 and powerpc were not compiled.
 
-Tested: lib/lockref.o builds without warnings (W=1) on x86-64, and
-builds for i386, arm64 and riscv64.  A freestanding check compares
-both update forms for counts around -128, -1, 0, 1 and INT_MAX with
-several lock-half values, run natively on x86-64 and under qemu-user
-for aarch64 little- and big-endian and riscv64: the words are equal in
-every case except the two big-endian cases named above.  s390 and
-powerpc were not compiled.
-
-Assisted-by: Claude perf
+Assisted-by: Claude
 ---
-Impact: low -- a few instructions per dentry reference get/put on every
-path lookup and every dput(); not measurable against boot-to-boot noise
-in a guest.  64-bit targets benefit; 32-bit targets are unchanged by
-construction.
+Impact: low -- 3 to 8 fewer instructions per lockref operation on 64-bit
+targets, i.e. per dentry get/put on every path lookup; 32-bit targets
+unchanged.  No runtime benchmark is claimed.
 
-Standalone; no dependency on the other patches from the same work.
+Standalone; no dependency on other patches.
 
 Considered and not done: testing the count condition on the whole word
 (count <= 0 as (s64)word < 1 << 32) saves 1-2 more instructions on
-x86-64 but only holds on little-endian; not worth an endian-conditional
-comparison.
+x86-64 but only holds on little-endian.
 
 Not tested: a big-endian kernel (arm64 big-endian is BROKEN in Kconfig;
-s390, powerpc and mips64 not compiled); arm32 (takes the unchanged
-32-bit path, not compiled); clang.
+s390, powerpc and mips64 not compiled); arm32 (unchanged 32-bit path,
+not compiled); clang.
 
  lib/lockref.c | 38 +++++++++++++++++++++++++++++++++-----
  1 file changed, 33 insertions(+), 5 deletions(-)

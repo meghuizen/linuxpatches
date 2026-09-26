@@ -4,7 +4,7 @@ One patch, sent on its own; it does not depend on the vfs series and the
 vfs series does not depend on it. Base: v7.3-rc3 (518e5b794c06); the
 file has not changed upstream since (last commit to lib/lockref.c:
 2026-07-24). Branch `sub-lockref-v2` in `/usr/src/linux-pt-lockref`,
-tip 77d37d9769a4.
+tip 30ea4a728531.
 
 Changes from the first version (which was in `../removed/`):
 
