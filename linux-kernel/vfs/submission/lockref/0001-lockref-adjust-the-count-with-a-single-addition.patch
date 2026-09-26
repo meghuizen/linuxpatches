@@ -1,0 +1,174 @@
+From 77d37d9769a41fede7087a834efb639042dd0860 Mon Sep 17 00:00:00 2001
+From: Michiel <367462+meghuizen@users.noreply.github.com>
+Date: Sun, 20 Sep 2026 13:29:23 +0200
+Subject: [PATCH] lockref: adjust the count with a single addition
+
+The cmpxchg fast paths in lib/lockref.c work on a copy of the 64-bit
+lock_count word but update it with new.count++ or new.count--.  On a
+64-bit target the compiler then extracts the 32-bit count, adjusts it
+and inserts it again before the cmpxchg.  x86-64, gcc 15.2,
+lockref_get():
+
+  before                         after
+    mov    %rax,%rdx               movabs $0x100000000,%rdx
+    mov    %rdx,%rcx               add    %rax,%rdx
+    mov    %edx,%edx
+    sar    $0x20,%rcx
+    add    $0x1,%ecx
+    shl    $0x20,%rcx
+    or     %rcx,%rdx
+    lock cmpxchg %rdx,(%rdi)       lock cmpxchg %rdx,(%rdi)
+
+Add or subtract the count's unit within the word instead: 1 << 32 on
+little-endian, 1 on big-endian, taken from the struct layout through a
+union.  On little-endian the count is the upper half, so the lock half
+cannot be affected.  On big-endian a carry or borrow could reach the
+lock half only when incrementing from -1 or decrementing from 0; the
+conditional variants return before storing such a result, and
+lockref_get() requires a held reference, so its count is at least 1.
+
+32-bit targets keep the plain int update: there the two halves are
+already separate registers, and the 64-bit add only costs moves around
+cmpxchg8b (i386: lockref_get() 42 -> 51 instructions with the word
+form; unchanged with this patch).
+
+Instructions per function in lib/lockref.o, gcc 15.2, base -> patched
+(x86-64 with the test kernel's config, the others defconfig):
+
+                        x86-64    arm64     riscv64   i386
+  lockref_get           27 -> 19  39 -> 34  47 -> 44  42 -> 42
+  lockref_get_not_zero  42 -> 36  52 -> 49  58 -> 57  65 -> 65
+  lockref_get_not_dead  42 -> 36  50 -> 47  58 -> 56  65 -> 65
+  lockref_put_or_lock   37 -> 33  49 -> 45  57 -> 55  51 -> 51
+  lockref_put_return    24 -> 21  31 -> 30  45 -> 43  48 -> 48
+
+The i386 object is identical to the unpatched one.  A big-endian
+aarch64 compile (-mbig-endian) of a userspace copy of the loop gives
+the same counts as little-endian, with "add x3, x1, #1" as the update.
+
+A userspace copy of the loop (single thread, uncontended, AMD Ryzen 9
+8940HX, perf stat, 3 x 5*10^7 get+put pairs, runs interleaved) goes
+from 58.0 to 51.0 instructions and from 29.3 to 26.9 cycles per pair.
+In a kernel booted with this patch alone, kernel instructions per
+open() and per stat() were within the boot-to-boot spread of the
+unpatched kernel (about 1%, 2 boots against 9): the saving is a few
+instructions out of several thousand per call.
+
+Tested: lib/lockref.o builds without warnings (W=1) on x86-64, and
+builds for i386, arm64 and riscv64.  A freestanding check compares
+both update forms for counts around -128, -1, 0, 1 and INT_MAX with
+several lock-half values, run natively on x86-64 and under qemu-user
+for aarch64 little- and big-endian and riscv64: the words are equal in
+every case except the two big-endian cases named above.  s390 and
+powerpc were not compiled.
+
+Assisted-by: Claude perf
+---
+Impact: low -- a few instructions per dentry reference get/put on every
+path lookup and every dput(); not measurable against boot-to-boot noise
+in a guest.  64-bit targets benefit; 32-bit targets are unchanged by
+construction.
+
+Standalone; no dependency on the other patches from the same work.
+
+Considered and not done: testing the count condition on the whole word
+(count <= 0 as (s64)word < 1 << 32) saves 1-2 more instructions on
+x86-64 but only holds on little-endian; not worth an endian-conditional
+comparison.
+
+Not tested: a big-endian kernel (arm64 big-endian is BROKEN in Kconfig;
+s390, powerpc and mips64 not compiled); arm32 (takes the unchanged
+32-bit path, not compiled); clang.
+
+ lib/lockref.c | 38 +++++++++++++++++++++++++++++++++-----
+ 1 file changed, 33 insertions(+), 5 deletions(-)
+
+diff --git a/lib/lockref.c b/lib/lockref.c
+index 9b3dd688d8cd..e59417f68c41 100644
+--- a/lib/lockref.c
++++ b/lib/lockref.c
+@@ -4,6 +4,34 @@
+ 
+ #if USE_CMPXCHG_LOCKREF
+ 
++/*
++ * Add @n to new->count.
++ *
++ * On a 64-bit target, adding the count's unit within the lock_count word
++ * (1 << 32 on little-endian, 1 on big-endian) saves extracting the 32-bit
++ * count, adjusting it and inserting it again.  On a 32-bit target the two
++ * halves already sit in separate registers and the plain add is shorter.
++ *
++ * On little-endian the count is the upper half, so the add cannot reach
++ * the lock.  On big-endian it could carry into the lock half only when
++ * incrementing from -1 or decrementing from 0: the conditional variants
++ * return before storing such a result, and lockref_get() requires a held
++ * reference, so its count is at least 1.
++ */
++static __always_inline void lockref_count_add(struct lockref *new, int n)
++{
++	if (BITS_PER_LONG == 64) {
++		const union {
++			struct lockref lr;
++			u64 v;
++		} one = { .lr = { .count = 1 } };
++
++		new->lock_count += (u64)(s64)n * one.v;
++	} else {
++		new->count += n;
++	}
++}
++
+ /*
+  * Note that the "cmpxchg()" reloads the "old" value for the
+  * failure case.
+@@ -42,7 +70,7 @@
+ void lockref_get(struct lockref *lockref)
+ {
+ 	CMPXCHG_LOOP(
+-		new.count++;
++		lockref_count_add(&new, 1);
+ 	,
+ 		return;
+ 	);
+@@ -63,7 +91,7 @@ bool lockref_get_not_zero(struct lockref *lockref)
+ 	bool retval = false;
+ 
+ 	CMPXCHG_LOOP(
+-		new.count++;
++		lockref_count_add(&new, 1);
+ 		if (old.count <= 0)
+ 			return false;
+ 	,
+@@ -90,7 +118,7 @@ EXPORT_SYMBOL(lockref_get_not_zero);
+ int lockref_put_return(struct lockref *lockref)
+ {
+ 	CMPXCHG_LOOP(
+-		new.count--;
++		lockref_count_add(&new, -1);
+ 		if (old.count <= 0)
+ 			return -1;
+ 	,
+@@ -108,7 +136,7 @@ EXPORT_SYMBOL(lockref_put_return);
+ bool lockref_put_or_lock(struct lockref *lockref)
+ {
+ 	CMPXCHG_LOOP(
+-		new.count--;
++		lockref_count_add(&new, -1);
+ 		if (old.count <= 1)
+ 			break;
+ 	,
+@@ -145,7 +173,7 @@ bool lockref_get_not_dead(struct lockref *lockref)
+ 	bool retval = false;
+ 
+ 	CMPXCHG_LOOP(
+-		new.count++;
++		lockref_count_add(&new, 1);
+ 		if (old.count < 0)
+ 			return false;
+ 	,
+
+base-commit: 518e5b794c06c0f0eb40df3e202274a66202c137
+-- 
+2.53.0
+

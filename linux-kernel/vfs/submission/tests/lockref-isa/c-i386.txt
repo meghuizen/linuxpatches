@@ -1,0 +1,16 @@
+get_old                50
+get_not_zero_old       56
+put_return_old         46
+put_or_lock_old        52
+get_not_dead_old       56
+get_new                51
+get_not_zero_new       57
+put_return_new         51
+put_or_lock_new        54
+get_not_dead_new       57
+get_not_zero_le        56
+put_return_le          50
+put_or_lock_le         54
+get_not_dead_le        56
+step_value             3
+__x86.get_pc_thunk.bp  2

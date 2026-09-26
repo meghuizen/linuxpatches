@@ -1,0 +1,15 @@
+get_old                37
+get_not_zero_old       44
+put_return_old         39
+put_or_lock_old        40
+get_not_dead_old       44
+get_new                32
+get_not_zero_new       40
+put_return_new         38
+put_or_lock_new        36
+get_not_dead_new       40
+get_not_zero_le        38
+put_return_le          38
+put_or_lock_le         37
+get_not_dead_le        37
+step_value             3

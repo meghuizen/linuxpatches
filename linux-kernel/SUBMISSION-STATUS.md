@@ -33,7 +33,7 @@ Instruction counts are reliable; cycles/rates only between adjacent boots.
 | vfs | selftests: build openat2 tests | builds and passes every boot | KEEP 1/2 | vfs/submission/0001 |
 | vfs | fs: hand the walk's dentry ref to the file | 16 procs one file: -38% kernel cycles/open (6741, 7934 vs 11326-13011); single-process open unchanged | REMOVED: same change as Mateusz Guzik's v5, queued in vfs.git vfs-7.4.lookup (161ce1e692d0); his also saves the mount ref op, ours adds nothing | vfs/submission/removed/ |
 | vfs | fs: allocate struct file only when needed (V2b) | ENOENT -22% (ext4) / -13% (tmpfs) kernel insns/open; successful open inside base range | KEEP 2/2, rebased on vfs-7.4.lookup (builds W=1 clean there) | vfs/submission/0002 |
-| vfs | lockref: single addition | +-1.3%, inside spread | REMOVED (no measurable difference) | vfs/submission/removed/ |
+| lib | lockref: single addition (v2, standalone) | fast path -8/-6/-6/-4/-3 insns (x86-64), -5/-3/-3/-4/-1 (arm64), -3/-1/-2/-2/-2 (riscv64); i386 unchanged (v1 had +9 on lockref_get); BE equivalence checked under qemu; in-kernel: inside spread | KEEP as `[PATCH]` standalone (2026-09-26); To: akpm, Cc: Linus, Guzik, hch, Bizjak | vfs/submission/lockref/0001 (branch sub-lockref-v2 in /usr/src/linux-pt-lockref, 77d37d9769a4) |
 | nf | 1 hash IPv4 as two words | new flow -155 insns/pkt (below all 21 other boots) | KEEP | net/submission/nf-next/0001 |
 | nf | 2 keep unscaled hashes for teardown | flush -597 insns/entry (-31%) | KEEP | nf-next/0002 |
 | nf | 3 warn when max > 8x buckets | 8x silent, 9x warns once, netns refused | KEEP | nf-next/0003 |

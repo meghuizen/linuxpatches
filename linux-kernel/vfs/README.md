@@ -37,13 +37,19 @@ The series is based on vfs.git `vfs-7.4.lookup`, on top of Mateusz
 Guzik's "fs: avoid spurious dentry ref/unref cycle on open"
 (161ce1e692d0), queued for Linux 7.4.
 
+Standalone, [`submission/lockref/`](submission/lockref/): "lockref:
+adjust the count with a single addition" (v2). Shortens every lockref
+fast path by 3-8 instructions on 64-bit targets (x86-64, arm64, riscv64
+kernel objects), leaves 32-bit code unchanged; not measurable at the
+syscall level. Per-ISA evidence in
+[`submission/tests/lockref-isa/RESULTS.md`](submission/tests/lockref-isa/RESULTS.md).
+
 Removed (in [`submission/removed/`](submission/removed/), reasons in
 [`submission/REVIEW.md`](submission/REVIEW.md)):
 
 | old # | patch | reason |
 |---|---|---|
 | 1 | fs: hand the path walk's dentry reference to the opened file | superseded: the same change by Mateusz Guzik is queued in vfs.git (161ce1e692d0) and also saves the mount reference operation. Our measurement of the idea: -38% kernel cycles/open with 16 processes on one file |
-| 11 | lockref: adjust the count with a single addition | no measurable difference: open/stat instructions within +-1.3%, inside the 2-4% spread |
 | 3-8 | rcu-walk statx (lsm, selinux, fs, ext4, btrfs, xfs) | bug: NULL dereference race under `rcu_read_lock()`; also skips `security_inode_getattr()` |
 | 9 | embed the LSM per-file blob in the struct file allocation | regression: +40 bytes per open file with AppArmor/Landlock (filp 192 -> 256) |
 | 12 | move `i_fop` and `i_flctx` off the refcount cacheline | regression that cannot be fixed: one more line on stat and open at some inode offsets |
