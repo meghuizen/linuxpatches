@@ -1,0 +1,201 @@
+INFO kernel 7.3.0-rc3-kbench-baseline-00824-g518e5b794c06
+INFO cmdline root=/dev/vda rw console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 nokaslr no_timer_check mitigations=off audit=0 selinux=0 apparmor=0 rcu_nocbs=1-15 irqaffinity=0 tsc=reliable clocksource=tsc kbench.auto=1 kbench.patchtest=1 kbench.ptonly=switchdiag
+INFO cpu-flags pge invpcid 
+INFO meltdown Not affected
+INFO spectre_v2 Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Not affected
+REP sched.switch.proc.n1 kinsn_per_yield 1764.63 1764.7 1764.74
+TEST sched.switch.proc.n1 kinsn_per_yield 1764.7
+REP sched.switch.proc.n1 kcyc_per_yield 700.453 682.778 681.733
+TEST sched.switch.proc.n1 kcyc_per_yield 682.778
+REP sched.switch.proc.n1 l1miss_per_yield 0.265833 0.197714 0.208026
+TEST sched.switch.proc.n1 l1miss_per_yield 0.208026
+REP sched.switch.proc.n1 switches_per_yield_info 2.49897e-06 2.81724e-06 3.28409e-06
+TEST sched.switch.proc.n1 switches_per_yield_info 2.81724e-06
+REP sched.switch.proc.n1 dTLB-load-misses_per_yield 0.00509364 0.0042073 0.00468656
+TEST sched.switch.proc.n1 dTLB-load-misses_per_yield 0.00468656
+REP sched.switch.proc.n1 iTLB-load-misses_per_yield 1.52443 1.12161 1.5313
+TEST sched.switch.proc.n1 iTLB-load-misses_per_yield 1.52443
+REP sched.switch.proc.n1 cache-misses_per_yield 0.188665 0.158936 0.172729
+TEST sched.switch.proc.n1 cache-misses_per_yield 0.172729
+REP sched.switch.proc.n1 branch-misses_per_yield 1.39486 1.31153 1.39201
+TEST sched.switch.proc.n1 branch-misses_per_yield 1.39201
+REP sched.switch.proc.n1 L1-icache-load-misses_per_yield 0.0490825 0.0424099 0.0461788
+TEST sched.switch.proc.n1 L1-icache-load-misses_per_yield 0.0461788
+REP sched.switch.proc.n2 kinsn_per_switch 3721.05 3743.96 3731.62
+TEST sched.switch.proc.n2 kinsn_per_switch 3731.62
+REP sched.switch.proc.n2 kcyc_per_switch 2328.51 2387.91 2366.77
+TEST sched.switch.proc.n2 kcyc_per_switch 2366.77
+REP sched.switch.proc.n2 l1miss_per_switch 7.25596 6.14393 4.53048
+TEST sched.switch.proc.n2 l1miss_per_switch 6.14393
+REP sched.switch.proc.n2 yields_per_switch_info 1.00001 1.00003 1
+TEST sched.switch.proc.n2 yields_per_switch_info 1.00001
+REP sched.switch.proc.n2 switches_per_s_info 1525890 1073715 1268424
+TEST sched.switch.proc.n2 switches_per_s_info 1268424
+REP sched.switch.proc.n2 dTLB-load-misses_per_switch 0.0645449 0.0544026 0.0381401
+TEST sched.switch.proc.n2 dTLB-load-misses_per_switch 0.0544026
+REP sched.switch.proc.n2 iTLB-load-misses_per_switch 1.35839 4.34389 3.07947
+TEST sched.switch.proc.n2 iTLB-load-misses_per_switch 3.07947
+REP sched.switch.proc.n2 cache-misses_per_switch 2.01326 1.61611 1.29997
+TEST sched.switch.proc.n2 cache-misses_per_switch 1.61611
+REP sched.switch.proc.n2 branch-misses_per_switch 2.01385 1.93495 1.89248
+TEST sched.switch.proc.n2 branch-misses_per_switch 1.93495
+REP sched.switch.proc.n2 L1-icache-load-misses_per_switch 1.03882 0.968397 0.944072
+TEST sched.switch.proc.n2 L1-icache-load-misses_per_switch 0.968397
+REP sched.switch.proc.n16 kinsn_per_switch 3991.42 3991.55 3993.67
+TEST sched.switch.proc.n16 kinsn_per_switch 3991.55
+REP sched.switch.proc.n16 kcyc_per_switch 2616.44 2605.61 2657.84
+TEST sched.switch.proc.n16 kcyc_per_switch 2616.44
+REP sched.switch.proc.n16 l1miss_per_switch 115.393 114.374 118.651
+TEST sched.switch.proc.n16 l1miss_per_switch 115.393
+REP sched.switch.proc.n16 yields_per_switch_info 0.999996 0.999993 0.999993
+TEST sched.switch.proc.n16 yields_per_switch_info 0.999993
+REP sched.switch.proc.n16 switches_per_s_info 1345941 1346628 1313628
+TEST sched.switch.proc.n16 switches_per_s_info 1345941
+REP sched.switch.proc.n16 dTLB-load-misses_per_switch 0.344924 0.321962 0.322326
+TEST sched.switch.proc.n16 dTLB-load-misses_per_switch 0.322326
+REP sched.switch.proc.n16 iTLB-load-misses_per_switch 0.136397 0.141626 2.41847
+TEST sched.switch.proc.n16 iTLB-load-misses_per_switch 0.141626
+REP sched.switch.proc.n16 cache-misses_per_switch 1.51293 1.64178 1.74473
+TEST sched.switch.proc.n16 cache-misses_per_switch 1.64178
+REP sched.switch.proc.n16 branch-misses_per_switch 2.1925 2.28797 2.24624
+TEST sched.switch.proc.n16 branch-misses_per_switch 2.24624
+REP sched.switch.proc.n16 L1-icache-load-misses_per_switch 1.33427 1.42222 1.14763
+TEST sched.switch.proc.n16 L1-icache-load-misses_per_switch 1.33427
+REP sched.switch.proc.n128 kinsn_per_switch 4242.32 4303.22 4793.79
+TEST sched.switch.proc.n128 kinsn_per_switch 4303.22
+REP sched.switch.proc.n128 kcyc_per_switch 3065.47 3271.63 5495.04
+TEST sched.switch.proc.n128 kcyc_per_switch 3271.63
+REP sched.switch.proc.n128 l1miss_per_switch 134.671 134.518 142.024
+TEST sched.switch.proc.n128 l1miss_per_switch 134.671
+REP sched.switch.proc.n128 yields_per_switch_info 0.999996 0.999985 0.999787
+TEST sched.switch.proc.n128 yields_per_switch_info 0.999985
+REP sched.switch.proc.n128 switches_per_s_info 1076684 407896 46983
+TEST sched.switch.proc.n128 switches_per_s_info 407896
+REP sched.switch.proc.n128 dTLB-load-misses_per_switch 0.350969 0.517731 1.62921
+TEST sched.switch.proc.n128 dTLB-load-misses_per_switch 0.517731
+REP sched.switch.proc.n128 iTLB-load-misses_per_switch 7.45116 9.48936 9.67364
+TEST sched.switch.proc.n128 iTLB-load-misses_per_switch 9.48936
+REP sched.switch.proc.n128 cache-misses_per_switch 53.9515 61.4152 96.7286
+TEST sched.switch.proc.n128 cache-misses_per_switch 61.4152
+REP sched.switch.proc.n128 branch-misses_per_switch 3.23135 3.69208 8.14272
+TEST sched.switch.proc.n128 branch-misses_per_switch 3.69208
+REP sched.switch.proc.n128 L1-icache-load-misses_per_switch 1.42534 1.62108 4.90917
+TEST sched.switch.proc.n128 L1-icache-load-misses_per_switch 1.62108
+REP sched.switch.proc.n512 kinsn_per_switch 4489.75 4428.33 4449.5
+TEST sched.switch.proc.n512 kinsn_per_switch 4449.5
+REP sched.switch.proc.n512 kcyc_per_switch 3998.34 3772.88 4002.45
+TEST sched.switch.proc.n512 kcyc_per_switch 3998.34
+REP sched.switch.proc.n512 l1miss_per_switch 153.144 149.087 154.777
+TEST sched.switch.proc.n512 l1miss_per_switch 153.144
+REP sched.switch.proc.n512 yields_per_switch_info 0.999959 0.99999 0.999994
+TEST sched.switch.proc.n512 yields_per_switch_info 0.99999
+REP sched.switch.proc.n512 switches_per_s_info 363898 879967 640735
+TEST sched.switch.proc.n512 switches_per_s_info 640735
+REP sched.switch.proc.n512 dTLB-load-misses_per_switch 2.13193 2.19046 2.44279
+TEST sched.switch.proc.n512 dTLB-load-misses_per_switch 2.19046
+REP sched.switch.proc.n512 iTLB-load-misses_per_switch 1.65226 1.6798 1.60135
+TEST sched.switch.proc.n512 iTLB-load-misses_per_switch 1.65226
+REP sched.switch.proc.n512 cache-misses_per_switch 93.4984 93.4345 95.5134
+TEST sched.switch.proc.n512 cache-misses_per_switch 93.4984
+REP sched.switch.proc.n512 branch-misses_per_switch 3.41016 3.3909 3.86385
+TEST sched.switch.proc.n512 branch-misses_per_switch 3.41016
+REP sched.switch.proc.n512 L1-icache-load-misses_per_switch 1.46148 1.42645 1.69099
+TEST sched.switch.proc.n512 L1-icache-load-misses_per_switch 1.46148
+REP sched.switch.thread.n1 kinsn_per_yield 1765.18 1764.69 1764.67
+TEST sched.switch.thread.n1 kinsn_per_yield 1764.69
+REP sched.switch.thread.n1 kcyc_per_yield 744.896 686.507 682.55
+TEST sched.switch.thread.n1 kcyc_per_yield 686.507
+REP sched.switch.thread.n1 l1miss_per_yield 0.296767 0.300305 0.209825
+TEST sched.switch.thread.n1 l1miss_per_yield 0.296767
+REP sched.switch.thread.n1 switches_per_yield_info 2.53799e-06 1.71161e-06 2.44485e-06
+TEST sched.switch.thread.n1 switches_per_yield_info 2.44485e-06
+REP sched.switch.thread.n1 dTLB-load-misses_per_yield 0.00450943 0.00390727 0.00766445
+TEST sched.switch.thread.n1 dTLB-load-misses_per_yield 0.00450943
+REP sched.switch.thread.n1 iTLB-load-misses_per_yield 1.33052 1.20941 6.20475
+TEST sched.switch.thread.n1 iTLB-load-misses_per_yield 1.33052
+REP sched.switch.thread.n1 cache-misses_per_yield 0.161777 0.153531 0.365873
+TEST sched.switch.thread.n1 cache-misses_per_yield 0.161777
+REP sched.switch.thread.n1 branch-misses_per_yield 1.34915 1.32516 1.4465
+TEST sched.switch.thread.n1 branch-misses_per_yield 1.34915
+REP sched.switch.thread.n1 L1-icache-load-misses_per_yield 0.0431973 0.0419096 0.075722
+TEST sched.switch.thread.n1 L1-icache-load-misses_per_yield 0.0431973
+REP sched.switch.thread.n2 kinsn_per_switch 3619.42 3622.79 3659.75
+TEST sched.switch.thread.n2 kinsn_per_switch 3622.79
+REP sched.switch.thread.n2 kcyc_per_switch 2076.88 2150.81 2177.89
+TEST sched.switch.thread.n2 kcyc_per_switch 2150.81
+REP sched.switch.thread.n2 l1miss_per_switch 2.28803 1.39803 2.37686
+TEST sched.switch.thread.n2 l1miss_per_switch 2.28803
+REP sched.switch.thread.n2 yields_per_switch_info 0.999996 0.999997 1.00015
+TEST sched.switch.thread.n2 yields_per_switch_info 0.999997
+REP sched.switch.thread.n2 switches_per_s_info 1896641 1819328 676070
+TEST sched.switch.thread.n2 switches_per_s_info 1819328
+REP sched.switch.thread.n2 dTLB-load-misses_per_switch 0.0134495 0.0144942 0.0307111
+TEST sched.switch.thread.n2 dTLB-load-misses_per_switch 0.0144942
+REP sched.switch.thread.n2 iTLB-load-misses_per_switch 0.0686952 0.686087 9.97905
+TEST sched.switch.thread.n2 iTLB-load-misses_per_switch 0.686087
+REP sched.switch.thread.n2 cache-misses_per_switch 0.551138 0.582913 1.58993
+TEST sched.switch.thread.n2 cache-misses_per_switch 0.582913
+REP sched.switch.thread.n2 branch-misses_per_switch 1.5782 1.60399 1.98823
+TEST sched.switch.thread.n2 branch-misses_per_switch 1.60399
+REP sched.switch.thread.n2 L1-icache-load-misses_per_switch 1.02103 0.944423 1.13404
+TEST sched.switch.thread.n2 L1-icache-load-misses_per_switch 1.02103
+REP sched.switch.thread.n16 kinsn_per_switch 3907.23 3896.56 3963.84
+TEST sched.switch.thread.n16 kinsn_per_switch 3907.23
+REP sched.switch.thread.n16 kcyc_per_switch 2507.08 2290.17 2573.36
+TEST sched.switch.thread.n16 kcyc_per_switch 2507.08
+REP sched.switch.thread.n16 l1miss_per_switch 97.3135 94.7502 95.2787
+TEST sched.switch.thread.n16 l1miss_per_switch 95.2787
+REP sched.switch.thread.n16 yields_per_switch_info 0.999995 0.999995 0.999986
+TEST sched.switch.thread.n16 yields_per_switch_info 0.999995
+REP sched.switch.thread.n16 switches_per_s_info 1391737 1621435 497492
+TEST sched.switch.thread.n16 switches_per_s_info 1391737
+REP sched.switch.thread.n16 dTLB-load-misses_per_switch 0.408107 0.306277 0.257626
+TEST sched.switch.thread.n16 dTLB-load-misses_per_switch 0.306277
+REP sched.switch.thread.n16 iTLB-load-misses_per_switch 0.191765 10.7388 4.21162
+TEST sched.switch.thread.n16 iTLB-load-misses_per_switch 4.21162
+REP sched.switch.thread.n16 cache-misses_per_switch 2.0032 12.398 1.29031
+TEST sched.switch.thread.n16 cache-misses_per_switch 2.0032
+REP sched.switch.thread.n16 branch-misses_per_switch 2.78173 6.57952 2.43391
+TEST sched.switch.thread.n16 branch-misses_per_switch 2.78173
+REP sched.switch.thread.n16 L1-icache-load-misses_per_switch 1.31391 3.13636 1.20967
+TEST sched.switch.thread.n16 L1-icache-load-misses_per_switch 1.31391
+REP sched.switch.thread.n128 kinsn_per_switch 4589.6 4211.46 4601.58
+TEST sched.switch.thread.n128 kinsn_per_switch 4589.6
+REP sched.switch.thread.n128 kcyc_per_switch 4256.89 2867.47 4259.99
+TEST sched.switch.thread.n128 kcyc_per_switch 4256.89
+REP sched.switch.thread.n128 l1miss_per_switch 111.541 118.863 115.32
+TEST sched.switch.thread.n128 l1miss_per_switch 115.32
+REP sched.switch.thread.n128 yields_per_switch_info 0.999788 0.999986 0.999478
+TEST sched.switch.thread.n128 yields_per_switch_info 0.999788
+REP sched.switch.thread.n128 switches_per_s_info 66057 488206 59423
+TEST sched.switch.thread.n128 switches_per_s_info 66057
+REP sched.switch.thread.n128 dTLB-load-misses_per_switch 0.489732 2.01752 0.845112
+TEST sched.switch.thread.n128 dTLB-load-misses_per_switch 0.845112
+REP sched.switch.thread.n128 iTLB-load-misses_per_switch 1.94204 5.39976 2.24776
+TEST sched.switch.thread.n128 iTLB-load-misses_per_switch 2.24776
+REP sched.switch.thread.n128 cache-misses_per_switch 52.8971 92.1667 60.3991
+TEST sched.switch.thread.n128 cache-misses_per_switch 60.3991
+REP sched.switch.thread.n128 branch-misses_per_switch 7.63244 13.7897 7.20646
+TEST sched.switch.thread.n128 branch-misses_per_switch 7.63244
+REP sched.switch.thread.n128 L1-icache-load-misses_per_switch 3.18872 5.83492 2.91371
+TEST sched.switch.thread.n128 L1-icache-load-misses_per_switch 3.18872
+REP sched.switch.thread.n512 kinsn_per_switch 4757.63 4837.26 5356.94
+TEST sched.switch.thread.n512 kinsn_per_switch 4837.26
+REP sched.switch.thread.n512 kcyc_per_switch 4305.09 5168.83 9109.43
+TEST sched.switch.thread.n512 kcyc_per_switch 5168.83
+REP sched.switch.thread.n512 l1miss_per_switch 115.074 129.544 180.705
+TEST sched.switch.thread.n512 l1miss_per_switch 129.544
+REP sched.switch.thread.n512 yields_per_switch_info 0.999779 0.999713 1.02245
+TEST sched.switch.thread.n512 yields_per_switch_info 0.999779
+REP sched.switch.thread.n512 switches_per_s_info 68003 52238 23519
+TEST sched.switch.thread.n512 switches_per_s_info 52238
+REP sched.switch.thread.n512 dTLB-load-misses_per_switch 2.43535 2.38699 2.43206
+TEST sched.switch.thread.n512 dTLB-load-misses_per_switch 2.43206
+REP sched.switch.thread.n512 iTLB-load-misses_per_switch 8.26985 5.13784 2.07695
+TEST sched.switch.thread.n512 iTLB-load-misses_per_switch 5.13784
+REP sched.switch.thread.n512 cache-misses_per_switch 103.325 102.879 101.56
+TEST sched.switch.thread.n512 cache-misses_per_switch 102.879
+REP sched.switch.thread.n512 branch-misses_per_switch 12.2142 11.7987 11.826
+TEST sched.switch.thread.n512 branch-misses_per_switch 11.826
+REP sched.switch.thread.n512 L1-icache-load-misses_per_switch 5.59796 5.42013 5.10624
+TEST sched.switch.thread.n512 L1-icache-load-misses_per_switch 5.42013

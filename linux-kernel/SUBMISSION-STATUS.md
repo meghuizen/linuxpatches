@@ -76,7 +76,11 @@ sub-vfs-final-7.4 in /usr/src/sub-vfs, tip ef5d4767f13a), nf `[PATCH nf-next 0/3
    privacy grep clean. The new links point to untracked files
    (submission/, this file), so all of it must be committed together.
    Commit/push only when the submitter asks.
-4. Harness notes: lockref call counting is dead (lockref_* have no
+4. Context-switch diagnostics (2026-09-27, one baseline boot):
+   sched/submission/tests/switchdiag-20260927/ (per-switch counters for
+   process vs thread switches at N = 1..512, cycles and L1-miss profiles
+   by kernel function). Findings in its README and the session notes.
+5. Harness notes: lockref call counting is dead (lockref_* have no
    __fentry__, use kprobes); context-switches CPU-wide probe can read 0
    on an idle CPU; staged harness edits live in scratchpad/stage/.
 
